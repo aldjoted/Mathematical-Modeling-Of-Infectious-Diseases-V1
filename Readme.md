@@ -1,4 +1,4 @@
-# Mathematical Modeling of SARS-CoV-2 Dynamics in Spain and General SIR Framework
+# Mathematical Modeling of SARS-CoV-2 Dynamics in Spain and General SEIR Framework
 
 This C++ project implements and calibrates an age-structured deterministic compartmental model (SEPAIHRD) to simulate the SARS-CoV-2 epidemic dynamics in Spain during 2020. It also includes a C++ framework with implementations of fundamental SIR (Susceptible-Infected-Recovered) models. The project focuses on Bayesian calibration techniques, assessment of Non-Pharmaceutical Intervention (NPI) impacts, and estimation of hidden epidemic dynamics, applying methodologies discussed in the SMATM128 course (UNamur).
 
@@ -279,10 +279,8 @@ Alex Djousse Tedongmene, Assited by AI
 ## References
 
 *   Methodologies discussed in the SMATM128 course (UNamur).
-* Particle Swarm Optimization Algorithm and Its Applications.
+* Particle Swarm Optimization Algorithm and Its Applications A Systematic Review Ahmed G. Gad1
 * COVID-19 Belgium: Extended SEIR-QD model with nursing homes and
 long-term scenarios-based forecasts
 
 ## Contact
-
-(TODO: )
