@@ -87,23 +87,22 @@ This C++ project implements and calibrates an age-structured deterministic compa
 
 1.  **Clone the repository:**
     ```bash
-    git clone https://github.com/aldjoted/Mathematical-Modeling-Of-Infectious-Diseases.git
-    cd Mathematical-Modeling-Of-Infectious-Diseases
+    git clone https://github.com/aldjoted/Mathematical-Modeling-Of-Infectious-Diseases-V1.git
     ```
-
-2.  **Create a build directory and navigate into it:**
+2.  **Enter the projec directory**
+3.  **Create a build directory and navigate into it:**
     ```bash
     mkdir build
     cd build
     ```
 
-3.  **Run CMake to configure the project:**
+4.  **Run CMake to configure the project:**
     ```bash
     cmake ..
     ```
     This will detect dependencies and generate Makefiles (or project files for other generators).
 
-4.  **Compile the project:**
+5.  **Compile the project:**
     ```bash
     make
     ```
