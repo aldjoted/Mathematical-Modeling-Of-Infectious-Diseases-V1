@@ -1,0 +1,41 @@
+# Metropolis-Hastings Sampler Settings
+# Note: For boolean flags, use 1.0 for true and 0.0 for false.
+
+# burn_in: Number of initial MCMC iterations to discard (burn-in period).
+# Helps the chain converge to the stationary distribution.
+# Default: 5000
+burn_in 0
+
+# mcmc_iterations: Number of MCMC iterations to run after the burn-in period.
+# These iterations are used for sampling from the posterior distribution.
+# Default: 10000
+mcmc_iterations 10
+
+# thinning: Interval for collecting samples. E.g., if 10, every 10th sample post-burn-in is kept.
+# Reduces autocorrelation between samples.
+# Default: 10
+thinning 1
+
+# mcmc_step_size: Coefficient for the proposal distribution's standard deviation.
+# Affects the size of steps taken in the parameter space. Needs tuning.
+# Default: 0.1
+mcmc_step_size 1.0
+
+# calculate_posterior_mean: Whether to calculate and potentially use the posterior mean
+# of the collected samples as the final best parameter set (if it yields a better objective value).
+# Default: 1.0 (true)
+calculate_posterior_mean 1.0 
+
+# report_interval: Frequency (in iterations) for logging progress updates.
+# Default: 200
+report_interval 10
+
+# mcmc_enable_refinement: Whether to enable an additional refinement step for proposed parameters.
+# This can involve a local search or directional exploration to improve proposal quality.
+# Default: 0.0 (false)
+mcmc_enable_refinement 1.0
+
+# mcmc_refinement_steps: If refinement is enabled, this specifies the number of
+# binary refinement steps to perform.
+# Default: 0
+mcmc_refinement_steps 5

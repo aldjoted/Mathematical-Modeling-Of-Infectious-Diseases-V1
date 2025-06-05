@@ -1,0 +1,56 @@
+# Parameter bounds for SEPAIHRD model calibration (Spain 2020)
+# Format: parameter_name lower_bound upper_bound
+
+# Disease transmission parameters
+beta 0.005 0.6
+theta 0.01 1.0
+
+# Disease progression rates (inverse durations)
+sigma 0.01 0.5     
+gamma_p 0.001 0.99 
+gamma_A 0.001 0.99
+gamma_I 0.001 0.99
+gamma_H 0.001 0.99
+gamma_ICU 0.001 0.99
+
+# Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+)
+# Fraction asymptomatic (p_i) - Must be between 0 and 1
+p_0 0.001 0.99
+p_1 0.001 0.99
+p_2 0.005 0.99 
+p_3 0.005 0.99 
+
+# Hospitalization rate/factor (h_i from I -> H) - Proportion, so 0 to 1
+h_0 0.001  0.99
+h_1 0.001  0.99  
+h_2 0.001  0.99
+h_3 0.001  0.99 
+
+# ICU admission rate/factor (icu_i from H -> ICU) - Proportion, so 0 to 1
+icu_0 0.001  0.99 
+icu_1 0.001  0.99
+icu_2 0.001  0.99
+icu_3 0.001  0.99 
+
+# Hospital mortality rate/factor (d_H_i from H -> D) - Proportion, so 0 to 1
+d_H_0 0.001  0.99
+d_H_1 0.001  0.99
+d_H_2 0.001  0.99
+d_H_3 0.001  0.99
+
+# ICU mortality rate/factor (d_ICU_i from ICU -> D) - Proportion, so 0 to 1
+d_ICU_0 0.001  0.99
+d_ICU_1 0.001  0.99
+d_ICU_2 0.001  0.99
+d_ICU_3 0.001  0.99
+
+# NPI scaling factors (kappa_period_X)
+# kappa_1 is fixed at 1.0 and not listed here as a calibratable parameter.
+# These bounds are based on the timeline analysis for Spain 2020.
+kappa_2 0.5 2.0  
+kappa_3 0.5 2.0 
+kappa_4 0.5 2.0  
+kappa_5 0.5 2.0   
+kappa_6 0.5 2.0   
+kappa_7 0.5 2.0   
+kappa_8 0.5 2.0   

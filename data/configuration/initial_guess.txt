@@ -1,0 +1,31 @@
+# Calibrated SEPAIHRD Model Parameters (Spain 2020) - INITIAL GUESSES Updated from PSO Final gbest value: 1237638.416378
+
+kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 300.0 305.0
+
+# Disease transmission parameters
+beta 0.1
+theta 0.1  
+
+# Disease progression rates (inverse durations)
+sigma 0.1    
+gamma_p 0.1    
+gamma_A 0.1    
+gamma_I 0.1    
+gamma_H 0.01   
+gamma_ICU 0.01  
+
+# NPI scaling factors (kappa_period_2, kappa_period_3, ... corresponding to end times above)
+# baseline kappa_1 = 1.0 (assumed fixed)
+kappa_values 1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0 # kappa_1 fixed, kappa_2 to kappa_8 updated from PSO
+
+# Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+)
+# Fraction asymptomatic
+p 0.05 0.05 0.05 0.05 
+# Hospitalization rate/factor (I -> H)
+h 0.05 0.05 0.05 0.05  
+# ICU admission rate/factor (H -> ICU)
+icu 0.05 0.05 0.05 0.05  
+# Hospital mortality rate/factor (H -> D)
+d_H 0.05 0.05 0.05 0.05  
+# ICU mortality rate/factor (ICU -> D)
+d_ICU 0.05 0.05 0.05 0.05  

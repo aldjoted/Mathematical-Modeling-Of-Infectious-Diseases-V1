@@ -1,0 +1,13 @@
+N 1000
+beta 0.4
+gamma 0.04
+S0 999
+I0 1
+R0 0
+t_start 0
+t_end 360
+h 0.01
+eps 1e-6
+numSimulations 100
+B 0.02
+mu 0.01

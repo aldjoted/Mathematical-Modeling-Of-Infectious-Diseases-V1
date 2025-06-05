@@ -1,0 +1,8 @@
+build/
+data/calibration/
+data/calibration_output/
+data/visualization/
+data/output
+data/visualizations/
+data/mcmc_samples/
+scripts/model/data/

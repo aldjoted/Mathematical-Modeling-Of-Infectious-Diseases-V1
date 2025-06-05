@@ -1,0 +1,63 @@
+# Hill Climbing Optimizer Settings
+# Note: For boolean flags, use 1.0 for true and 0.0 for false.
+
+# iterations: Total number of optimization iterations.
+# Default: 5000
+iterations 10
+
+# initial_step: Initial coefficient for the step size.
+# Default: 1.0
+initial_step 1.0
+
+# cooling_rate: Rate at which the step size coefficient is reduced (multiplied by this factor).
+# Should be between 0.001 and 0.999.
+# Default: 0.995
+cooling_rate 0.995
+
+# refinement_steps: Number of binary refinement steps to apply to a promising move.
+# Default: 5
+refinement_steps 5
+
+# burnin_factor: Fraction of total iterations to consider as the burn-in phase.
+# During burn-in, step sizes might be handled differently (e.g., larger).
+# Value between 0.0 and 1.0.
+# Default: 0.2
+burnin_factor 0.2
+
+# burnin_step_increase: Multiplier for step size during the burn-in phase.
+# Can help explore the space more broadly initially.
+# Default: 1.5
+burnin_step_increase 1.5
+
+# post_burnin_step_coef: Base step size coefficient used after the burn-in phase for 'all parameter' steps.
+# Default: 1.0
+post_burnin_step_coef 1.0
+
+# one_param_step_coef: Base step size coefficient for 'one parameter at a time' steps.
+# Default: 1.0
+one_param_step_coef 1.0
+
+# min_step_coef: Minimum allowed step size coefficient to prevent steps from becoming too small.
+# Default: 0.01
+min_step_coef 0.01
+
+# report_interval: Frequency (in iterations) for logging progress updates.
+# Default: 100 (changed from 10 in original file to match typical defaults)
+report_interval 100
+
+# restart_interval: Iteration interval for performing a restart from the best-found solution.
+# 0 means no restarts.
+# Default: 0 (changed from 5000 in original file to match typical defaults if no restart is desired)
+restart_interval 0
+
+# restart_resets_step: If true (1.0), reset the step size coefficient to its initial value upon restart.
+# Default: 1.0 (true)
+restart_resets_step 1.0
+
+# enable_bidirectional: If true (1.0), check both forward and reverse directions for a step.
+# Default: 1.0 (true)
+enable_bidirectional 1.0
+
+# enable_elongation: If true (1.0), attempt to extend a successful step further in the same direction.
+# Default: 1.0 (true)
+enable_elongation 1.0

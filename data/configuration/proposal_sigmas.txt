@@ -1,0 +1,59 @@
+# Proposal Sigmas for MCMC calibration (SEPAIHRD model, Spain 2020)
+# These are standard deviations for the proposal distribution (e.g., Gaussian random walk).
+
+# Disease transmission parameters
+beta 0.001
+theta 0.001
+
+# Disease progression rates (inverse durations) mostly 0-1 range
+sigma 0.001 
+# gamma_p 
+gamma_p 0.001  
+# gamma_A 
+gamma_A 0.001 
+# gamma_I 
+gamma_I 0.001 
+# gamma_H 
+gamma_H 0.001  
+# gamma_ICU 
+gamma_ICU 0.001
+
+# Age-specific parameters (probabilities/rates, mostly 0-1 range)
+p_0 0.001
+p_1 0.001
+p_2 0.001
+p_3 0.001
+
+# h_i (probabilities/rates, mostly 0-1 range)
+h_0 0.001
+h_1 0.001
+h_2 0.001
+h_3 0.001 
+
+# icu_i (ICU admission rate, range up to ~0.5)
+icu_0 0.001
+icu_1 0.001
+icu_2 0.001
+icu_3 0.001
+
+# d_H_i (Hospital mortality, range up to ~0.6)
+d_H_0 0.001
+d_H_1 0.001
+d_H_2 0.001
+d_H_3 0.001
+
+# d_ICU_i (ICU mortality, range up to ~0.8)
+d_ICU_0 0.001
+d_ICU_1 0.001
+d_ICU_2 0.001
+d_ICU_3 0.001
+
+# NPI scaling factors (kappa_period_X)
+# kappa_1 is fixed at 1.0 and not listed here.
+kappa_2 0.001
+kappa_3 0.001
+kappa_4 0.001
+kappa_5 0.001
+kappa_6 0.001
+kappa_7 0.001
+kappa_8 0.001
