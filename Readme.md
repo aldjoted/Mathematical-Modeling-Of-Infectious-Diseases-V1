@@ -271,9 +271,6 @@ The `scripts/` directory contains utility scripts for various tasks. For detaile
 *   **`scripts/data-visualization/`**: Scripts to generate plots, charts, or other graphical representations of data, model outputs, and calibration results.
 *   **`scripts/utils/`**: Utility scripts providing helper functions or common functionalities used by other scripts in the project.
 
-## Contributing
-Alex Djousse Tedongmene, Assited by AI
-
 ## License
 
 ## References
