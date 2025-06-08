@@ -9,12 +9,12 @@ burn_in 0
 # mcmc_iterations: Number of MCMC iterations to run after the burn-in period.
 # These iterations are used for sampling from the posterior distribution.
 # Default: 10000
-mcmc_iterations 10
+mcmc_iterations 100
 
 # thinning: Interval for collecting samples. E.g., if 10, every 10th sample post-burn-in is kept.
 # Reduces autocorrelation between samples.
 # Default: 10
-thinning 1
+thinning 10
 
 # mcmc_step_size: Coefficient for the proposal distribution's standard deviation.
 # Affects the size of steps taken in the parameter space. Needs tuning.
@@ -28,14 +28,14 @@ calculate_posterior_mean 1.0
 
 # report_interval: Frequency (in iterations) for logging progress updates.
 # Default: 200
-report_interval 10
+report_interval 20
 
 # mcmc_enable_refinement: Whether to enable an additional refinement step for proposed parameters.
 # This can involve a local search or directional exploration to improve proposal quality.
 # Default: 0.0 (false)
-mcmc_enable_refinement 1.0
+mcmc_enable_refinement 0.0
 
 # mcmc_refinement_steps: If refinement is enabled, this specifies the number of
 # binary refinement steps to perform.
 # Default: 0
-mcmc_refinement_steps 5
+mcmc_refinement_steps 3

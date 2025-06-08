@@ -22,30 +22,32 @@ AGE_GROUPS = ['0-30', '30-60', '60-80', '80+']
 # Define NPI periods for consistent plotting (dates from project description)
 # (Day 0 = March 1, 2020)
 NPI_PERIODS_DEF = [
-    (0, 13, 'Baseline (CoMix)', 'lightgray', 0.2),
-    (14, 63, 'Strict Lockdown', 'lightcoral', 0.2),
-    (64, 84, 'De-esc. Ph 0-1', 'palegoldenrod', 0.3),
-    (85, 111, 'De-esc. Ph 2-early 3', 'lightblue', 0.3),
-    (112, 183, '"New Normality" / Summer', 'lightgreen', 0.2),
-    (184, 237, 'Autumn Resurgence', 'sandybrown', 0.3),
-    (238, 300, 'Second State of Alarm', 'plum', 0.3),
-    (301, 305, 'End of Year / Vax Start', 'lightsteelblue', 0.3)
+    ("2020-03-01", "2020-03-14", 'Baseline (CoMix)', 'lightgray', 0.2),
+    ("2020-03-15", "2020-05-03", 'Strict Lockdown', 'lightcoral', 0.2),
+    ("2020-05-04", "2020-05-24", 'De-esc. Ph 0-1', 'palegoldenrod', 0.3),
+    ("2020-05-25", "2020-06-20", 'De-esc. Ph 2-early 3', 'lightblue', 0.3),
+    ("2020-06-21", "2020-08-31", '"New Normality" / Summer', 'lightgreen', 0.2),
+    ("2020-09-01", "2020-10-24", 'Autumn Resurgence', 'sandybrown', 0.3),
+    ("2020-10-25", "2020-12-26", 'Second State of Alarm', 'plum', 0.3),
+    ("2020-12-27", "2020-12-31", 'End of Year / Vax Start', 'lightsteelblue', 0.3)
 ]
 
 
 def add_npi_shading(ax, periods=NPI_PERIODS_DEF):
-    """Adds NPI period shading to an Axes object."""
+    """Adds NPI period shading to an Axes object based on dates."""
     y_min, y_max = ax.get_ylim()
-    for start, end, label, color, alpha in periods:
-        ax.axvspan(start, end, alpha=alpha, color=color, label=label if start == 0 else None) # Only label first span for legend
-    ax.set_ylim(y_min, y_max) # Restore original y-limits
+    for start_str, end_str, label, color, alpha in periods:
+        start_date = pd.to_datetime(start_str)
+        end_date = pd.to_datetime(end_str)
+        ax.axvspan(start_date, end_date, alpha=alpha, color=color)
+    ax.set_ylim(y_min, y_max)
 
 class SEPAIHRDAnalyzer:
-    def __init__(self, output_dir_base):
+    def __init__(self, output_dir_base, start_date_str):
         self.output_dir_base = Path(output_dir_base)
-        self.figures_dir = self.output_dir_base / "python_figures"
+        self.figures_dir = self.output_dir_base / "PostCalibrationFigures"
         self.figures_dir.mkdir(parents=True, exist_ok=True)
-        self.start_date = pd.to_datetime("2020-03-01")
+        self.start_date = pd.to_datetime(start_date_str)
 
     def _get_filepath(self, *subpaths):
         return self.output_dir_base / Path(*subpaths)
@@ -68,6 +70,13 @@ class SEPAIHRDAnalyzer:
         else:
             print(f"Warning: File not found - {filepath}")
             return None
+        
+    def _format_date_axis(self, ax):
+        """Helper to format date axes consistently."""
+        ax.xaxis.set_major_locator(mdates.MonthLocator(bymonthday=1, interval=2)) # Ticks tous les 2 mois
+        ax.xaxis.set_minor_locator(mdates.MonthLocator(bymonthday=1)) # Ticks mineurs tous les mois
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y')) # Format "Mois Année"
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
     def plot_posterior_predictive_checks(self):
         """Plot daily and cumulative incidence with observed data and model uncertainty."""
@@ -100,7 +109,8 @@ class SEPAIHRDAnalyzer:
             ax.set_title(f'Posterior Predictive Check: Daily {dtype.replace("_", " ").title()}', fontsize=14)
             ax.set_ylabel('Count', fontsize=12)
             ax.legend()
-            add_npi_shading(ax)
+            add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+            self._format_date_axis(ax) 
 
             # --- Cumulative Data ---
             median_cum_df = self._load_csv("posterior_predictive", f"{cum_dtype}_median.csv")
@@ -127,7 +137,8 @@ class SEPAIHRDAnalyzer:
             ax.legend()
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.xticks(rotation=45)
-            add_npi_shading(ax)
+            add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+            self._format_date_axis(ax)
 
             plt.tight_layout()
             plt.savefig(self.figures_dir / f"ppc_{dtype}.png", dpi=300, bbox_inches='tight')
@@ -240,7 +251,8 @@ class SEPAIHRDAnalyzer:
         ax.grid(True, alpha=0.3)
         ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
         plt.xticks(rotation=45)
-        add_npi_shading(ax)
+        add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+        self._format_date_axis(ax) 
 
         plt.tight_layout()
         plt.savefig(self.figures_dir / "seroprevalence_trajectory_validation.png", dpi=300, bbox_inches='tight')
@@ -437,7 +449,8 @@ class SEPAIHRDAnalyzer:
             ax.grid(True, alpha=0.3)
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
             plt.xticks(rotation=45)
-            add_npi_shading(ax)
+            add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+            self._format_date_axis(ax) 
 
             plt.tight_layout()
             plt.savefig(self.figures_dir / f"scenario_trajectories_{key}.png", dpi=300, bbox_inches='tight')
@@ -587,14 +600,52 @@ class SEPAIHRDAnalyzer:
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Analyze SEPAIHRD model post-calibration outputs (Python Script)')
-    parser.add_argument('output_dir_base', type=str,
-                       help='Path to the base output directory from C++ PostCalibrationAnalyser')
+        description='Analyze SEPAIHRD model post-calibration outputs (Python Script)',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+
+    try:
+        script_path = Path(__file__).resolve()
+        project_root = script_path.parent.parent.parent
+        default_output_dir = project_root / 'data' / 'output'
+    except NameError:
+        project_root = Path.cwd()
+        default_output_dir = project_root / 'data' / 'output'
+        print(f"Warning: '__file__' not found. Assuming project root is current directory: {project_root}")
+
+    parser.add_argument(
+        '--output-dir', 
+        type=str,
+        default=str(default_output_dir),
+        help='Path to the base output directory from C++ PostCalibrationAnalyser'
+    )
+
+    parser.add_argument(
+        '--start-date',
+        type=str,
+        default='2020-03-01',
+        help='The start date of the simulation (YYYY-MM-DD), corresponding to time=0.'
+    )
     
     args = parser.parse_args()
-    
-    analyzer = SEPAIHRDAnalyzer(args.output_dir_base)
-    analyzer.run_full_analysis()
+    output_dir_to_analyze = Path(args.output_dir)
+
+    print(f"--- Starting Analysis ---")
+    print(f"Analyzing data from: {output_dir_to_analyze.resolve()}")
+    print(f"Using simulation start date: {args.start_date}")
+
+    try:
+        analyzer = SEPAIHRDAnalyzer(output_dir_to_analyze, args.start_date)
+        analyzer.run_full_analysis()
+    except FileNotFoundError as e:
+        print(f"\nCritical Error: {e}")
+        print("Please ensure the C++ simulation has been run and the output directory exists.")
+        print(f"Expected directory structure: {output_dir_to_analyze}/posterior_predictive, etc.")
+        return 1
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 if __name__ == "__main__":
     main()

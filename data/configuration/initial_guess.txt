@@ -1,31 +1,37 @@
-# Calibrated SEPAIHRD Model Parameters (Spain 2020) - INITIAL GUESSES Updated from PSO Final gbest value: 1237638.416378
+# SEPAIHRD Model Parameters - INITIAL GUESS (Epidemiologically Informed)
 
 kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 300.0 305.0
 
-# Disease transmission parameters
-beta 0.1
-theta 0.1  
+# --- Disease transmission parameters ---
+beta 0.25
+theta 0.5
 
-# Disease progression rates (inverse durations)
-sigma 0.1    
-gamma_p 0.1    
-gamma_A 0.1    
-gamma_I 0.1    
-gamma_H 0.01   
-gamma_ICU 0.01  
+# --- Disease progression rates (inverse durations) ---
+# ~4 days latent period
+sigma 0.25 
+# ~2 days presymptomatic     
+gamma_p 0.5
+# ~10 days asymptomatic recovery     
+gamma_A 0.1
+# ~7 days symptomatic recovery     
+gamma_I 0.14
+# ~10 days hospital stay    
+gamma_H 0.1
+# ~14 days ICU stay     
+gamma_ICU 0.07 
 
-# NPI scaling factors (kappa_period_2, kappa_period_3, ... corresponding to end times above)
-# baseline kappa_1 = 1.0 (assumed fixed)
-kappa_values 1.0 1.0 1.0 1.0 1.0 1.0 1.0 1.0 # kappa_1 fixed, kappa_2 to kappa_8 updated from PSO
+# --- NPI scaling factors (kappa_values) ---
+# kappa_1 is fixed
+kappa_values 1.0 0.25 0.6 0.8 1.1 1.4 0.4 0.9
 
-# Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+)
-# Fraction asymptomatic
-p 0.05 0.05 0.05 0.05 
-# Hospitalization rate/factor (I -> H)
-h 0.05 0.05 0.05 0.05  
-# ICU admission rate/factor (H -> ICU)
-icu 0.05 0.05 0.05 0.05  
-# Hospital mortality rate/factor (H -> D)
-d_H 0.05 0.05 0.05 0.05  
-# ICU mortality rate/factor (ICU -> D)
-d_ICU 0.05 0.05 0.05 0.05  
+# --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
+# Fraction asymptomatic (p)
+p 0.8 0.5 0.3 0.1
+# Hospitalization rate (h)
+h 0.01 0.05 0.15 0.25
+# ICU admission rate (icu)
+icu 0.05 0.15 0.25 0.15
+# Hospital mortality rate (d_H)
+d_H 0.01 0.03 0.1 0.20
+# ICU mortality rate (d_ICU)
+d_ICU 0.05 0.15 0.3 0.45

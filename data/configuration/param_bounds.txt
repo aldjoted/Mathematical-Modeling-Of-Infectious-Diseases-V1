@@ -1,56 +1,70 @@
 # Parameter bounds for SEPAIHRD model calibration (Spain 2020)
 # Format: parameter_name lower_bound upper_bound
 
-# Disease transmission parameters
-beta 0.005 0.6
-theta 0.01 1.0
+# --- Transmission Parameters ---
+# Baseline transmission rate
+beta    0.05   0.5
+ # Relative transmissibility of symptomatic cases   
+theta   0.1    1.0  
 
-# Disease progression rates (inverse durations)
-sigma 0.01 0.5     
-gamma_p 0.001 0.99 
-gamma_A 0.001 0.99
-gamma_I 0.001 0.99
-gamma_H 0.001 0.99
-gamma_ICU 0.001 0.99
+# --- Disease Progression Rates (inverse durations in days) ---
+# 1/sigma = Latent period (e.g., 2-7 days)
+sigma     0.14   0.5
+# 1/gamma_p = Presymptomatic infectious period (e.g., 1-3 days)
+gamma_p   0.33   1.0
+# 1/gamma_A = Asymptomatic infectious period (e.g., 5-14 days)
+gamma_A   0.07   0.2
+# 1/gamma_I = Symptomatic infectious period (at home) (e.g., 5-10 days)
+gamma_I   0.1    0.2
+# 1/gamma_H = Hospital stay duration (non-ICU) (e.g., 7-20 days)
+gamma_H   0.05   0.14
+# 1/gamma_ICU = ICU stay duration (e.g., 10-25 days)
+gamma_ICU 0.04   0.1
 
-# Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+)
-# Fraction asymptomatic (p_i) - Must be between 0 and 1
-p_0 0.001 0.99
-p_1 0.001 0.99
-p_2 0.005 0.99 
-p_3 0.005 0.99 
+# --- Age-specific Parameters (structured bounds) ---
+# Fraction asymptomatic (p_i) - higher for younger people
+p_0   0.4   0.9
+p_1   0.2   0.7
+p_2   0.1   0.5
+p_3   0.05  0.3
 
-# Hospitalization rate/factor (h_i from I -> H) - Proportion, so 0 to 1
-h_0 0.001  0.99
-h_1 0.001  0.99  
-h_2 0.001  0.99
-h_3 0.001  0.99 
+# Hospitalization rate/factor (h_i) - increasing with age
+h_0   0.001 0.05
+h_1   0.01  0.15
+h_2   0.05  0.30
+h_3   0.1   0.50
 
-# ICU admission rate/factor (icu_i from H -> ICU) - Proportion, so 0 to 1
-icu_0 0.001  0.99 
-icu_1 0.001  0.99
-icu_2 0.001  0.99
-icu_3 0.001  0.99 
+# ICU admission rate/factor (icu_i) - highest for middle-aged adults
+icu_0   0.01  0.15
+icu_1   0.05  0.30
+icu_2   0.05  0.40
+icu_3   0.02  0.25
 
-# Hospital mortality rate/factor (d_H_i from H -> D) - Proportion, so 0 to 1
-d_H_0 0.001  0.99
-d_H_1 0.001  0.99
-d_H_2 0.001  0.99
-d_H_3 0.001  0.99
+# Hospital mortality rate/factor (d_H_i) - increasing with age
+d_H_0   0.001 0.05
+d_H_1   0.005 0.15
+d_H_2   0.05  0.30
+d_H_3   0.1   0.40
 
-# ICU mortality rate/factor (d_ICU_i from ICU -> D) - Proportion, so 0 to 1
-d_ICU_0 0.001  0.99
-d_ICU_1 0.001  0.99
-d_ICU_2 0.001  0.99
-d_ICU_3 0.001  0.99
+# ICU mortality rate/factor (d_ICU_i) - increasing with age
+d_ICU_0 0.01  0.20
+d_ICU_1 0.05  0.35
+d_ICU_2 0.1   0.50
+d_ICU_3 0.2   0.60
 
-# NPI scaling factors (kappa_period_X)
-# kappa_1 is fixed at 1.0 and not listed here as a calibratable parameter.
-# These bounds are based on the timeline analysis for Spain 2020.
-kappa_2 0.5 2.0  
-kappa_3 0.5 2.0 
-kappa_4 0.5 2.0  
-kappa_5 0.5 2.0   
-kappa_6 0.5 2.0   
-kappa_7 0.5 2.0   
-kappa_8 0.5 2.0   
+# --- NPI Scaling Factors (kappa_period_X) ---
+# kappa_1 is fixed at 1.0 (baseline)
+# Strict Lockdown
+kappa_2 0.1   0.5
+# De-escalation Phase 1   
+kappa_3 0.3   0.8
+# De-escalation Phase 2   
+kappa_4 0.5   1.0 
+# Summer / "New Normality"
+kappa_5 0.8   1.3
+# Autumn Resurgence   
+kappa_6 1.0   1.8
+# Second State of Alarm  
+kappa_7 0.2   0.7
+# End of Year   
+kappa_8 0.5   1.2   

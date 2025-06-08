@@ -421,18 +421,15 @@ int main(int argc, char* argv[]) {
                 
                 // 2. MCMC SAMPLE ANALYSIS (if available)
                 std::vector<PostCalibrationMetrics> all_mcmc_metrics;
-                // Define these variables outside the if-block so they're accessible in the summary section
-                int total_samples = 0;
+                
                 int burn_in_samples = 0;
                 int thinning_interval = 1;
-                
+                int total_samples = static_cast<int>(mcmc_samples.size());
+                int target_analysis_samples = total_samples;
+
                 if (!mcmc_samples.empty()) {
                     Logger::getInstance().info("main", "Analyzing MCMC samples with enhanced configuration...");
-                    int target_analysis_samples = total_samples;
-                    thinning_interval = 1;
-                    burn_in_samples = 0;
-                    thinning_interval = 1;
-                    
+
                     Logger::getInstance().info("main", "MCMC Analysis Configuration:");
                     Logger::getInstance().info("main", "  Total samples: " + std::to_string(total_samples));
                     Logger::getInstance().info("main", "  Burn-in: " + std::to_string(burn_in_samples));
