@@ -63,6 +63,7 @@ PiecewiseConstantNpiStrategy::PiecewiseConstantNpiStrategy(
 
     for(const auto& pair : param_bounds_map_){
         bool found = false;
+        if (pair.first == "kappa_1") continue;
         for(const auto& name : npi_param_names_){
             if(pair.first == name){
                 found = true;

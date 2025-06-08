@@ -52,9 +52,9 @@ namespace epidemic {
         }
         abs_error = abs_error_;
         rel_error = rel_error_;
-        Logger::getInstance().debug("Simulator::setErrorTolerance",
+        /*Logger::getInstance().debug("Simulator::setErrorTolerance",
                                    "Error tolerances set to abs=" + std::to_string(abs_error) +
-                                   ", rel=" + std::to_string(rel_error));
+                                   ", rel=" + std::to_string(rel_error));*/
     }
     
     SimulationResult Simulator::run(const Eigen::VectorXd& initial_state,

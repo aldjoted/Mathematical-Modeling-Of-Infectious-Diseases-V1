@@ -74,6 +74,7 @@ std::shared_ptr<PiecewiseConstantNpiStrategy> createNpiStrategy(
     
     std::map<std::string, std::pair<double, double>> npi_specific_bounds;
     for(const auto& name : all_kappa_parameter_names) {
+        if (name == "kappa_1") continue; // ne pas ajouté le kappa fixe
         auto it = overall_param_bounds.find(name);
         if (it != overall_param_bounds.end()) {
             npi_specific_bounds[name] = it->second;
@@ -156,16 +157,15 @@ int main(int argc, char* argv[]) {
                           "PSO + MCMC" : "Hill Climbing + MCMC";
     
     // === LOGGER SETUP ===
-    Logger::getInstance().setLogLevel(LogLevel::DEBUG);
+    Logger::getInstance().setLogLevel(LogLevel::INFO);
     Logger::getInstance().info("main", "Starting Age-Structured SEPAIHRD Model Simulation...");
     Logger::getInstance().info("main", "Selected calibration algorithm: " + algorithm_name);
     cout << "Using calibration algorithm: " << algorithm_name << endl;
     
     try {
-        const int num_age_classes = 4;
-        const int fixed_kappa_model_index = 0;
-
         // === FILE PATHS SETUP ===
+        const int num_age_classes = epidemic::constants::DEFAULT_NUM_AGE_CLASSES;
+        const int fixed_kappa_model_index = 0;
         const string project_root = FileUtils::getProjectRoot();
         Logger::getInstance().debug("main", "Project root: " + project_root);
         
@@ -183,10 +183,8 @@ int main(int argc, char* argv[]) {
         // === DATA LOADING ===
         Logger::getInstance().info("main", "Loading calibration data from: " + data_path);
         CalibrationData data(data_path, "2020-03-01", "2020-12-31");
-
         Logger::getInstance().info("main", "Loading contact matrix from: " + contact_matrix_path);
         MatrixXd C = readMatrixFromCSV(contact_matrix_path, num_age_classes, num_age_classes);
-        
         const auto N = data.getPopulationByAgeGroup();
         if (N.size() != num_age_classes) {
             throw DataFormatException("main", "Population data size mismatch");
@@ -394,351 +392,53 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Error calculating reproduction numbers: " << e.what() << std::endl;
             }
             // === POST-CALIBRATION ANALYSIS ===
-            Logger::getInstance().info("main", "Running comprehensive post-calibration analysis...");
+            Logger::getInstance().info("main", "Starting comprehensive post-calibration analysis...");
             try {
-                // Create PostCalibrationAnalyser
+                // Créer le modèle avec les paramètres finaux pour l'analyseur
+                auto final_npi_strategy = createNpiStrategy(final_calibrated_params, all_kappa_parameter_names, overall_param_bounds);
+                auto final_model_template = std::make_shared<AgeSEPAIHRDModel>(final_calibrated_params, final_npi_strategy);
+
                 auto post_calibration_analyser = std::make_shared<PostCalibrationAnalyser>(
-                    final_calibrated_model,
+                    final_model_template,
                     solver_strategy,
                     time_points,
                     initial_state,
                     output_dir,
                     data
                 );
-                
-                // 1. BASELINE SINGLE RUN ANALYSIS
-                Logger::getInstance().info("main", "Analyzing baseline calibrated run...");
-                std::string baseline_run_id = "final_calibrated_baseline";
-                PostCalibrationMetrics baseline_metrics = post_calibration_analyser->analyzeSingleRun(
-                    final_calibrated_params, 
-                    baseline_run_id
-                );
-                
-                // Log key baseline metrics
-                Logger::getInstance().info("main", "Baseline R0: " + std::to_string(baseline_metrics.R0));
-                Logger::getInstance().info("main", "Baseline Attack Rate: " + std::to_string(baseline_metrics.overall_attack_rate));
-                Logger::getInstance().info("main", "Baseline IFR: " + std::to_string(baseline_metrics.overall_IFR));
-                
-                // 2. MCMC SAMPLE ANALYSIS (if available)
-                std::vector<PostCalibrationMetrics> all_mcmc_metrics;
-                
-                int burn_in_samples = 0;
-                int thinning_interval = 1;
-                int total_samples = static_cast<int>(mcmc_samples.size());
-                int target_analysis_samples = total_samples;
 
-                if (!mcmc_samples.empty()) {
-                    Logger::getInstance().info("main", "Analyzing MCMC samples with enhanced configuration...");
+                int total_sample_size = mcmc_samples.size();
+                
+                // Lire les paramètres pour l'analyse
+                std::map<std::string, double> mcmc_settings = readMetropolisHastingsSettings(FileUtils::joinPaths(project_root, "data/configuration/mcmc_settings.txt"));
+                auto get_setting = [&](const std::string& key, int default_val) {
+                    auto it = mcmc_settings.find(key);
+                    return (it != mcmc_settings.end()) ? static_cast<int>(it->second) : default_val;
+                };
 
-                    Logger::getInstance().info("main", "MCMC Analysis Configuration:");
-                    Logger::getInstance().info("main", "  Total samples: " + std::to_string(total_samples));
-                    Logger::getInstance().info("main", "  Burn-in: " + std::to_string(burn_in_samples));
-                    Logger::getInstance().info("main", "  Thinning interval: " + std::to_string(thinning_interval));
-                    Logger::getInstance().info("main", "  Target analysis samples: " + std::to_string(target_analysis_samples));
-                    
-                    all_mcmc_metrics = post_calibration_analyser->analyzeMCMCRuns(
-                        mcmc_samples,
-                        calibrator.getParameterManager(),
-                        target_analysis_samples,
-                        burn_in_samples,   
-                        thinning_interval,
-                        true  // Save individual MCMC run details for diagnostic purposes
-                    );
-                    
-                    Logger::getInstance().info("main", "Processed " + std::to_string(all_mcmc_metrics.size()) + " MCMC samples");
+                int num_samples_for_ppc = get_setting("ppc_samples", total_sample_size);
+                if (mcmc_samples.size() < static_cast<size_t>(num_samples_for_ppc)) {
+                    num_samples_for_ppc = mcmc_samples.size();
                 }
-                
-                // 3. COMPREHENSIVE REPORT GENERATION
-                Logger::getInstance().info("main", "Generating comprehensive post-calibration report...");
-                
-                // Configure report parameters based on available samples
-                int num_samples_for_ppc = static_cast<int>(mcmc_samples.size());
-                int burn_in_for_summary = 0; 
-                int thinning_for_summary = 1; 
-                
+                int batch_size = get_setting("analysis_batch_size", 100);
+
+                // Lancer le rapport complet optimisé
                 post_calibration_analyser->generateFullReport(
                     mcmc_samples,
                     calibrator.getParameterManager(),
                     num_samples_for_ppc,
-                    burn_in_for_summary,  
-                    thinning_for_summary  
+                    0,
+                    1,
+                    batch_size
                 );
-                
-                // 4. ENE-COVID VALIDATION WITH REAL DATA
-                // ENE-COVID survey data (May 2020) - Replace with actual values
-                const double ENE_COVID_TARGET_DAY = 80.0;
-                const double ENE_COVID_MEAN_SEROPREVALENCE = 0.051; 
-                const double ENE_COVID_LOWER_CI = 0.045; 
-                const double ENE_COVID_UPPER_CI = 0.057; 
-                
-                if (!all_mcmc_metrics.empty()) {
-                    Logger::getInstance().info("main", "Performing ENE-COVID seroprevalence validation...");
-                    
-                    post_calibration_analyser->validateAgainstENECOVID(
-                        all_mcmc_metrics,
-                        ENE_COVID_TARGET_DAY,
-                        ENE_COVID_MEAN_SEROPREVALENCE,
-                        ENE_COVID_LOWER_CI,
-                        ENE_COVID_UPPER_CI
-                    );
-                    
-                    Logger::getInstance().info("main", "ENE-COVID validation completed");
-                }
-                
-                // 5. SCENARIO ANALYSIS
-                Logger::getInstance().info("main", "Performing counterfactual scenario analysis...");
-                
-                // Use the best calibrated parameters as baseline for scenarios
-                SEPAIHRDParameters scenario_baseline_params = final_calibrated_params;
-                
-                // Define multiple scenarios
-                std::vector<std::pair<std::string, SEPAIHRDParameters>> scenarios;
-                
-                // Scenario 1: Stricter lockdown (reduce kappa_2 by 20%)
-                SEPAIHRDParameters stricter_lockdown = scenario_baseline_params;
-                if (stricter_lockdown.kappa_values.size() > 1) {
-                    stricter_lockdown.kappa_values[1] = std::max(0.0, stricter_lockdown.kappa_values[1] * 0.8);
-                }
-                scenarios.push_back({"stricter_lockdown_20pct", stricter_lockdown});
-                
-                // Scenario 2: Weaker lockdown (increase kappa_2 by 30%)
-                SEPAIHRDParameters weaker_lockdown = scenario_baseline_params;
-                if (weaker_lockdown.kappa_values.size() > 1) {
-                    weaker_lockdown.kappa_values[1] *= 1.3;
-                }
-                scenarios.push_back({"weaker_lockdown_30pct", weaker_lockdown});
-                
-                // Scenario 3: Earlier lockdown (start lockdown 1 week earlier)
-                SEPAIHRDParameters earlier_lockdown = scenario_baseline_params;
-                if (earlier_lockdown.kappa_end_times.size() > 0) {
-                    earlier_lockdown.kappa_end_times[0] = std::max(0.0, earlier_lockdown.kappa_end_times[0] - 7.0);
-                    // Adjust subsequent end times if necessary
-                    for (size_t i = 1; i < earlier_lockdown.kappa_end_times.size(); ++i) {
-                        if (earlier_lockdown.kappa_end_times[i] <= earlier_lockdown.kappa_end_times[i-1]) {
-                            earlier_lockdown.kappa_end_times[i] = earlier_lockdown.kappa_end_times[i-1] + 7.0;
-                        }
-                    }
-                }
-                scenarios.push_back({"earlier_lockdown_1week", earlier_lockdown});
-                
-                // Scenario 4: Later lockdown (start lockdown 1 week later)
-                SEPAIHRDParameters later_lockdown = scenario_baseline_params;
-                if (later_lockdown.kappa_end_times.size() > 0) {
-                    later_lockdown.kappa_end_times[0] += 7.0;
-                    // Adjust subsequent end times if necessary
-                    for (size_t i = 1; i < later_lockdown.kappa_end_times.size(); ++i) {
-                        later_lockdown.kappa_end_times[i] += 7.0;
-                    }
-                }
-                scenarios.push_back({"later_lockdown_1week", later_lockdown});
-                
-                // Scenario 5: No lockdown (all kappa values = 1.0 except baseline)
-                SEPAIHRDParameters no_lockdown = scenario_baseline_params;
-                for (size_t i = 1; i < no_lockdown.kappa_values.size(); ++i) {
-                    no_lockdown.kappa_values[i] = 1.0;
-                }
-                scenarios.push_back({"no_lockdown_counterfactual", no_lockdown});
-                
-                // Scenario 6: Extended lockdown (extend strict measures longer)
-                SEPAIHRDParameters extended_lockdown = scenario_baseline_params;
-                if (extended_lockdown.kappa_end_times.size() > 1 && extended_lockdown.kappa_values.size() > 1) {
-                    // Extend the second period (strict lockdown) by 2 weeks
-                    extended_lockdown.kappa_end_times[1] += 14.0;
-                    // Use the stricter kappa value for longer
-                    if (extended_lockdown.kappa_values.size() > 2) {
-                        extended_lockdown.kappa_values[2] = extended_lockdown.kappa_values[1];
-                    }
-                }
-                scenarios.push_back({"extended_lockdown_2weeks", extended_lockdown});
-                
-                post_calibration_analyser->performScenarioAnalysis(scenario_baseline_params, scenarios);
-                Logger::getInstance().info("main", "Scenario analysis completed");
-                
-                // 6. POSTERIOR PREDICTIVE CHECKS
-                if (!mcmc_samples.empty()) {
-                    Logger::getInstance().info("main", "Generating detailed posterior predictive checks...");
-                    
-                    // Use a good sample size for PPC
-                    int ppc_sample_size = static_cast<int>(mcmc_samples.size());
-                    
-                    PosteriorPredictiveData ppd_data = post_calibration_analyser->generatePosteriorPredictiveChecks(
-                        mcmc_samples,
-                        calibrator.getParameterManager(),
-                        ppc_sample_size
-                    );
-                    
-                    // The PPC data is automatically saved within generatePosteriorPredictiveChecks
-                    Logger::getInstance().info("main", "Posterior predictive checks completed with " + 
-                                             std::to_string(ppc_sample_size) + " samples");
-                }
-                
-                // 7. PARAMETER POSTERIOR ANALYSIS (Enhanced)
-                if (!mcmc_samples.empty()) {
-                    Logger::getInstance().info("main", "Analyzing parameter posteriors...");
-                    
-                    int posterior_burn_in = 0;
-                    int posterior_thinning = 1;
-                    
-                    post_calibration_analyser->saveParameterPosteriors(
-                        mcmc_samples,
-                        calibrator.getParameterManager(),
-                        posterior_burn_in,
-                        posterior_thinning
-                    );
-                    
-                    Logger::getInstance().info("main", "Parameter posterior analysis completed");
-                }
-                
-                // 8. SUMMARY REPORT
-                Logger::getInstance().info("main", "Generating analysis summary...");
-                std::string summary_path = FileUtils::joinPaths(output_dir, "post_calibration_summary.txt");
-                std::ofstream summary_file(summary_path);
-                
-                summary_file << "=== POST-CALIBRATION ANALYSIS SUMMARY ===" << std::endl;
-                summary_file << "Analysis Date: " << std::chrono::system_clock::now().time_since_epoch().count() << std::endl;
-                summary_file << "Algorithm Used: " << algorithm_name << std::endl;
-                summary_file << std::endl;
-                
-                summary_file << "=== BASELINE METRICS ===" << std::endl;
-                summary_file << "R0: " << std::fixed << std::setprecision(4) << baseline_metrics.R0 << std::endl;
-                summary_file << "Overall Attack Rate: " << baseline_metrics.overall_attack_rate << std::endl;
-                summary_file << "Overall IFR: " << baseline_metrics.overall_IFR << std::endl;
-                summary_file << "Peak Hospital Occupancy: " << baseline_metrics.peak_hospital_occupancy << std::endl;
-                summary_file << "Peak ICU Occupancy: " << baseline_metrics.peak_ICU_occupancy << std::endl;
-                summary_file << "Total Cumulative Deaths: " << baseline_metrics.total_cumulative_deaths << std::endl;
-                summary_file << std::endl;
-                
-                summary_file << "=== MCMC ANALYSIS ===" << std::endl;
-                summary_file << "Total MCMC Samples: " << mcmc_samples.size() << std::endl;
-                summary_file << "Analyzed Samples: " << all_mcmc_metrics.size() << std::endl;
-                summary_file << std::endl;
-                
-                summary_file << "=== ANALYSIS OUTPUTS ===" << std::endl;
-                summary_file << "- Posterior Predictive Checks: " << FileUtils::joinPaths(output_dir, "posterior_predictive") << std::endl;
-                summary_file << "- MCMC Aggregated Results: " << FileUtils::joinPaths(output_dir, "mcmc_aggregated") << std::endl;
-                summary_file << "- Seroprevalence Validation: " << FileUtils::joinPaths(output_dir, "seroprevalence") << std::endl;
-                summary_file << "- Parameter Posteriors: " << FileUtils::joinPaths(output_dir, "parameter_posteriors") << std::endl;
-                summary_file << "- Scenario Analysis: " << FileUtils::joinPaths(output_dir, "scenarios") << std::endl;
-                summary_file << std::endl;
-                
-                summary_file << "=== SCENARIOS ANALYZED ===" << std::endl;
-                for (const auto& scenario : scenarios) {
-                    summary_file << "- " << scenario.first << std::endl;
-                }
-                
-                summary_file.close();
-                Logger::getInstance().info("main", "Analysis summary saved to: " + summary_path);
-                
-                Logger::getInstance().info("main", "Comprehensive post-calibration analysis completed successfully.");
-                
-                // Display summary to console
-                std::cout << "\n=== POST-CALIBRATION ANALYSIS COMPLETED ===" << std::endl;
-                std::cout << "Results saved to: " << output_dir << std::endl;
-                std::cout << "Key Findings:" << std::endl;
-                std::cout << "  - R0: " << std::fixed << std::setprecision(3) << baseline_metrics.R0 << std::endl;
-                std::cout << "  - Attack Rate: " << baseline_metrics.overall_attack_rate * 100 << "%" << std::endl;
-                std::cout << "  - IFR: " << baseline_metrics.overall_IFR * 100 << "%" << std::endl;
-                std::cout << "  - Total Deaths: " << static_cast<int>(baseline_metrics.total_cumulative_deaths) << std::endl;
-                std::cout << "  - Scenarios Analyzed: " << scenarios.size() << std::endl;
-                std::cout << "  - MCMC Samples Processed: " << all_mcmc_metrics.size() << std::endl;
-                
 
-                // 9. GENERATE AGGREGATED FILES FOR PYTHON ANALYSIS
-                if (!all_mcmc_metrics.empty()) {
-                    Logger::getInstance().info("main", "Generating aggregated files for Python analysis...");
-                    
-                    // Create aggregated Rt trajectory with CI
-                    ensureOutputSubdirectoryExists(output_dir, "rt_trajectories");
-                    std::string rt_agg_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir, "rt_trajectories"), "Rt_aggregated_with_uncertainty.csv");
-                    std::ofstream rt_agg_file(rt_agg_path);
-                    rt_agg_file << "time,date,median,q025,q975\n";
-                    
-                    if (!all_mcmc_metrics[0].Rt_time.empty()) {
-                        size_t time_length = all_mcmc_metrics[0].Rt_time.size();
-                        
-                        for (size_t t = 0; t < time_length; ++t) {
-                            std::vector<double> rt_values_at_t;
-                            for (const auto& metrics : all_mcmc_metrics) {
-                                if (t < metrics.Rt_median.size()) {
-                                    rt_values_at_t.push_back(metrics.Rt_median[t]);
-                                }
-                            }
-                            
-                            if (!rt_values_at_t.empty()) {
-                                std::sort(rt_values_at_t.begin(), rt_values_at_t.end());
-                                double median = rt_values_at_t[rt_values_at_t.size() / 2];
-                                double q025 = rt_values_at_t[static_cast<size_t>(rt_values_at_t.size() * 0.025)];
-                                double q975 = rt_values_at_t[static_cast<size_t>(rt_values_at_t.size() * 0.975)];
-                                double time_val = all_mcmc_metrics[0].Rt_time[t];
-                                
-                                rt_agg_file << std::fixed << std::setprecision(6);
-                                rt_agg_file << time_val << "," << time_val << "," 
-                                           << median << "," << q025 << "," << q975 << "\n";
-                            }
-                        }
-                    }
-                    rt_agg_file.close();
-                    Logger::getInstance().info("main", "Rt aggregated trajectory saved to: " + rt_agg_path);
-                    
-                    // Create aggregated seroprevalence trajectory with CI
-                    ensureOutputSubdirectoryExists(output_dir, "seroprevalence");
-                    std::string sero_agg_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir, "seroprevalence"), "seroprevalence_trajectory.csv");
-                    std::ofstream sero_agg_file(sero_agg_path);
-                    sero_agg_file << "time,date,median,lower_95,upper_95,ene_covid_point,ene_covid_lower,ene_covid_upper\n";
-                    
-                    if (!all_mcmc_metrics[0].seroprevalence_time.empty()) {
-                        size_t sero_time_length = all_mcmc_metrics[0].seroprevalence_time.size();
-                        
-                        for (size_t t = 0; t < sero_time_length; ++t) {
-                            std::vector<double> sero_values_at_t;
-                            for (const auto& metrics : all_mcmc_metrics) {
-                                if (t < metrics.seroprevalence_median.size()) {
-                                    sero_values_at_t.push_back(metrics.seroprevalence_median[t]);
-                                }
-                            }
-                            
-                            if (!sero_values_at_t.empty()) {
-                                std::sort(sero_values_at_t.begin(), sero_values_at_t.end());
-                                double median = sero_values_at_t[sero_values_at_t.size() / 2];
-                                double lower_95 = sero_values_at_t[static_cast<size_t>(sero_values_at_t.size() * 0.025)];
-                                double upper_95 = sero_values_at_t[static_cast<size_t>(sero_values_at_t.size() * 0.975)];
-                                double time_val = all_mcmc_metrics[0].seroprevalence_time[t];
-                                
-                                // Add ENE-COVID validation point at target day
-                                std::string ene_covid_point = "80.0";
-                                std::string ene_covid_lower = "0.051";
-                                std::string ene_covid_upper = "0.057";
-                                if (std::abs(time_val - ENE_COVID_TARGET_DAY) < 0.5) {
-                                    ene_covid_point = std::to_string(ENE_COVID_MEAN_SEROPREVALENCE);
-                                    ene_covid_lower = std::to_string(ENE_COVID_LOWER_CI);
-                                    ene_covid_upper = std::to_string(ENE_COVID_UPPER_CI);
-                                }
-                                
-                                sero_agg_file << std::fixed << std::setprecision(6);
-                                sero_agg_file << time_val << "," << time_val << "," 
-                                             << median << "," << lower_95 << "," << upper_95 << ","
-                                             << ene_covid_point << "," << ene_covid_lower << "," << ene_covid_upper << "\n";
-                            }
-                        }
-                    }
-                    sero_agg_file.close();
-                    Logger::getInstance().info("main", "Seroprevalence aggregated trajectory saved to: " + sero_agg_path);
-                    
-                    // Ensure MCMC aggregated summary exists (should be created by generateFullReport)
-                    std::string mcmc_summary_check = FileUtils::joinPaths(FileUtils::joinPaths(output_dir, "mcmc_aggregated"), "scalar_metrics_summary.csv");
-                    std::ifstream file_check(mcmc_summary_check);
-                    if (!file_check.good()) {
-                        Logger::getInstance().warning("main", "MCMC aggregated summary not found. Python script may not work correctly.");
-                    }
-                    
-                    Logger::getInstance().info("main", "Aggregated files for Python analysis completed.");
-                }                
+                std::cout << "\n=== POST-CALIBRATION ANALYSIS COMPLETED SUCCESSFULLY ===" << std::endl;
+                std::cout << "Results and figures saved to: " << output_dir << std::endl;
+
             } catch (const std::exception& e) {
                 Logger::getInstance().error("main", "Post-calibration analysis failed: " + std::string(e.what()));
-                std::cerr << "Warning: Post-calibration analysis failed: " << e.what() << std::endl;
-                std::cerr << "Continuing with basic results..." << std::endl;
+                cerr << "Error during post-calibration analysis: " << e.what() << endl;
             }
-
         } catch (const std::exception& e) {
             Logger::getInstance().error("main", "Calibration failed: " + std::string(e.what()));
             cerr << "Error during calibration: " << e.what() << endl;

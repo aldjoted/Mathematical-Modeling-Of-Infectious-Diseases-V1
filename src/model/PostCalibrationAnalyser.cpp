@@ -1,6 +1,7 @@
 #include "model/PostCalibrationAnalyser.hpp"
 #include "model/AgeSEPAIHRDsimulator.hpp"
 #include "model/ReproductionNumberCalculator.hpp"
+#include "model/ModelConstants.hpp"
 #include "sir_age_structured/SimulationResultProcessor.hpp"
 #include "utils/FileUtils.hpp"
 #include "utils/Logger.hpp"
@@ -10,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <sstream>
 
 namespace epidemic {
 
@@ -30,9 +32,9 @@ PostCalibrationAnalyser::PostCalibrationAnalyser(
     if (!model_template_) throw std::invalid_argument("PostCalibrationAnalyser: Model template cannot be null");
     if (!solver_strategy_) throw std::invalid_argument("PostCalibrationAnalyser: Solver strategy cannot be null");
     if (time_points_.empty()) throw std::invalid_argument("PostCalibrationAnalyser: Time points cannot be empty");
-    if (initial_state_.size() == 0) throw std::invalid_argument("PostCalibrationAnalyser: Initial state cannot be empty.");
+    if (initial_state_.size() == 0) throw std::invalid_argument("PostCalibrationAnalyser: Initial state cannot be empty");
     if (initial_state_.size() != model_template_->getStateSize()) {
-        throw std::invalid_argument("PostCalibrationAnalyser: Initial state size does not match model state size.");
+        throw std::invalid_argument("PostCalibrationAnalyser: Initial state size does not match model state size");
     }
 
     num_age_classes_ = model_template_->getNumAgeClasses();
@@ -49,43 +51,38 @@ void PostCalibrationAnalyser::generateFullReport(
     IParameterManager& param_manager,
     int num_samples_for_posterior_pred,
     int burn_in_for_summary,
-    int thinning_for_summary) {
+    int thinning_for_summary,
+    int batch_size) {
 
-    Logger::getInstance().info("PostCalibrationAnalyser", "Starting full report generation...");
+    Logger::getInstance().info("PostCalibrationAnalyser", "Starting memory-optimized full report generation...");
 
+    // 1. Posterior Predictive Checks
     ensureOutputSubdirectoryExists("posterior_predictive");
     Logger::getInstance().info("PostCalibrationAnalyser", "Generating Posterior Predictive Checks...");
-    PosteriorPredictiveData ppd_data = generatePosteriorPredictiveChecks(
+    PosteriorPredictiveData ppd_data = generatePosteriorPredictiveChecksOptimized(
         param_samples, param_manager, num_samples_for_posterior_pred
     );
     savePosteriorPredictiveCheckData(ppd_data, "posterior_predictive");
-    Logger::getInstance().info("PostCalibrationAnalyser", "Posterior Predictive Checks saved.");
-
-    ensureOutputSubdirectoryExists("mcmc_aggregated");
-    Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing MCMC runs for aggregated metrics...");
-    std::vector<PostCalibrationMetrics> all_mcmc_metrics = analyzeMCMCRuns(
-        param_samples, param_manager, -1, burn_in_for_summary, thinning_for_summary, false
-    );
-    if (!all_mcmc_metrics.empty()) {
-        saveAggregatedMCMCMetrics(all_mcmc_metrics, "mcmc_aggregated");
-        Logger::getInstance().info("PostCalibrationAnalyser", "Aggregated MCMC metrics saved.");
-
-        ensureOutputSubdirectoryExists("seroprevalence");
-        Logger::getInstance().info("PostCalibrationAnalyser", "Performing ENE-COVID validation...");
-        validateAgainstENECOVID(all_mcmc_metrics);
-        Logger::getInstance().info("PostCalibrationAnalyser", "ENE-COVID validation saved.");
-    } else {
-        Logger::getInstance().warning("PostCalibrationAnalyser", "No MCMC metrics generated, skipping ENE-COVID validation and aggregated saves.");
-    }
-
+    
+    // Clear PPC data from memory
+    ppd_data = PosteriorPredictiveData();
+    
+    // 2. MCMC Analysis in batches
+    ensureOutputSubdirectoryExists("mcmc_batches");
+    Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing MCMC runs in batches...");
+    analyzeMCMCRunsInBatches(param_samples, param_manager, burn_in_for_summary, thinning_for_summary, batch_size);
+    
+    // 3. Parameter Posteriors with streaming
     ensureOutputSubdirectoryExists("parameter_posteriors");
     Logger::getInstance().info("PostCalibrationAnalyser", "Saving parameter posteriors...");
-    saveParameterPosteriors(param_samples, param_manager, burn_in_for_summary, thinning_for_summary);
-    Logger::getInstance().info("PostCalibrationAnalyser", "Parameter posteriors saved.");
-
+    saveParameterPosteriorsStreaming(param_samples, param_manager, burn_in_for_summary, thinning_for_summary);
+    
+    // 4. Scenario Analysis
     ensureOutputSubdirectoryExists("scenarios");
     if (!param_samples.empty()) {
-        Logger::getInstance().info("PostCalibrationAnalyser", "Preparing for Scenario Analysis...");
+        Logger::getInstance().info("PostCalibrationAnalyser", "Performing scenario analysis...");
+        
+        // Compute mean parameters efficiently
         Eigen::VectorXd mean_params = Eigen::VectorXd::Zero(param_manager.getParameterCount());
         int count = 0;
         for (size_t i = burn_in_for_summary; i < param_samples.size(); i += thinning_for_summary) {
@@ -93,286 +90,243 @@ void PostCalibrationAnalyser::generateFullReport(
             count++;
         }
         if (count > 0) mean_params /= count;
-        else if (!param_samples.empty()) mean_params = param_samples.back();
-        else {
-             Logger::getInstance().error("PostCalibrationAnalyser", "No samples to derive mean parameters for scenarios.");
-             return;
-        }
-
+        
         param_manager.updateModelParameters(mean_params);
-        SEPAIHRDParameters baseline_scenario_params = model_template_->getModelParameters();
-
+        SEPAIHRDParameters baseline_params = model_template_->getModelParameters();
+        
+        // Define scenarios
         std::vector<std::pair<std::string, SEPAIHRDParameters>> scenarios;
-        SEPAIHRDParameters stricter_params = baseline_scenario_params;
+        
+        SEPAIHRDParameters stricter_params = baseline_params;
         if (stricter_params.kappa_values.size() > 1) {
-            stricter_params.kappa_values[1] = std::max(0.0, stricter_params.kappa_values[1] * 0.9);
+            stricter_params.kappa_values[1] *= 0.9;
         }
-        scenarios.push_back({"stricter_lockdown_k2_10pct", stricter_params});
-
-        SEPAIHRDParameters weaker_params = baseline_scenario_params;
+        scenarios.push_back({"stricter_lockdown", stricter_params});
+        
+        SEPAIHRDParameters weaker_params = baseline_params;
         if (weaker_params.kappa_values.size() > 1) {
             weaker_params.kappa_values[1] *= 1.1;
         }
-        scenarios.push_back({"weaker_lockdown_k2_p10pct", weaker_params});
+        scenarios.push_back({"weaker_lockdown", weaker_params});
         
-        SEPAIHRDParameters earlier_lockdown_params = baseline_scenario_params;
-        if (earlier_lockdown_params.kappa_end_times.size() > 1) {
-            earlier_lockdown_params.kappa_end_times[0] = std::max(0.0, earlier_lockdown_params.kappa_end_times[0] - 7.0);
-            if (earlier_lockdown_params.kappa_end_times.size() > 0 && earlier_lockdown_params.kappa_end_times[1] <= earlier_lockdown_params.kappa_end_times[0]) {
-                 earlier_lockdown_params.kappa_end_times[1] = earlier_lockdown_params.kappa_end_times[0] + 7.0;
-            }
-        }
-        scenarios.push_back({"earlier_lockdown_p2_1wk", earlier_lockdown_params});
-
-        performScenarioAnalysis(baseline_scenario_params, scenarios);
-        Logger::getInstance().info("PostCalibrationAnalyser", "Scenario Analysis completed and saved.");
-    } else {
-        Logger::getInstance().warning("PostCalibrationAnalyser", "No MCMC samples provided, skipping scenario analysis.");
+        performScenarioAnalysisOptimized(baseline_params, scenarios);
     }
-
-    Logger::getInstance().info("PostCalibrationAnalyser", "Full report generation finished.");
-}
-
-
-PostCalibrationMetrics PostCalibrationAnalyser::analyzeSingleRun(
-    const SEPAIHRDParameters& params, const std::string& run_id) {
     
-    auto run_npi_strategy = model_template_->getNpiStrategy()->clone(); 
-
-    auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
-
-    AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_,
-                                  time_points_.front(), time_points_.back(), 1.0, // dt_hint = 1.0
-                                  1e-6, 1e-6); // Default abs/rel error
-
-    SimulationResult sim_result = simulator.run(initial_state_, time_points_);
-
-    PostCalibrationMetrics metrics = processSimulationResults(sim_result, params, run_id);
-    return metrics;
+    Logger::getInstance().info("PostCalibrationAnalyser", "Full report generation completed.");
 }
 
-PostCalibrationMetrics PostCalibrationAnalyser::processSimulationResults(
-    const SimulationResult& sim_result,
+EssentialMetrics PostCalibrationAnalyser::analyzeSingleRunLightweight(
     const SEPAIHRDParameters& params,
     const std::string& run_id) {
-    (void)run_id;
-
-    PostCalibrationMetrics metrics;
-    metrics.kappa_values.clear(); 
-
-    auto current_npi_strategy = model_template_->getNpiStrategy()->clone();
-    auto current_model_for_rn = std::make_shared<AgeSEPAIHRDModel>(params, current_npi_strategy);
-    ReproductionNumberCalculator rn_calc(current_model_for_rn);
-
+    
+    EssentialMetrics metrics;
+    metrics.age_specific_IFR.resize(num_age_classes_);
+    metrics.age_specific_IHR.resize(num_age_classes_);
+    metrics.age_specific_IICUR.resize(num_age_classes_);
+    metrics.age_specific_attack_rate.resize(num_age_classes_);
+    
+    // Create model and run simulation
+    auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
+    auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
+    
+    // Calculate R0
+    ReproductionNumberCalculator rn_calc(run_model);
     metrics.R0 = rn_calc.calculateR0();
-
-    metrics.Rt_time = sim_result.time_points;
-    metrics.Rt_median.resize(sim_result.time_points.size());
-    for (size_t t = 0; t < sim_result.time_points.size(); ++t) {
-        Eigen::Map<const Eigen::VectorXd> S_t(&sim_result.solution[t][0 * num_age_classes_], num_age_classes_);
-        metrics.Rt_median[t] = rn_calc.calculateRt(S_t, sim_result.time_points[t]);
+    
+    // Run simulation
+    AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_,
+                                  time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
+    SimulationResult sim_result = simulator.run(initial_state_, time_points_);
+    
+    if (!sim_result.isValid()) {
+        Logger::getInstance().warning("PostCalibrationAnalyser", "Invalid simulation for " + run_id);
+        return metrics;
     }
     
-    int num_model_compartments = AgeSEPAIHRDSimulator::NUM_COMPARTMENTS; // S,E,P,A,I,H,ICU,R,D = 9
-    metrics.hidden_compartments_median["E"] = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "E", num_model_compartments);
-    metrics.hidden_compartments_median["P"] = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "P", num_model_compartments);
-    metrics.hidden_compartments_median["A"] = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "A", num_model_compartments);
-    metrics.hidden_compartments_median["I"] = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "I", num_model_compartments);
-    metrics.hidden_compartments_median["R"] = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "R", num_model_compartments);
-
-    Eigen::MatrixXd H_comp = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "H", num_model_compartments);
-    Eigen::MatrixXd ICU_comp = SimulationResultProcessor::getCompartmentData(sim_result, *current_model_for_rn, "ICU", num_model_compartments);
+    // Process results efficiently without storing full trajectories
+    Eigen::VectorXd cumulative_infections = Eigen::VectorXd::Zero(num_age_classes_);
+    Eigen::VectorXd cumulative_hosp = Eigen::VectorXd::Zero(num_age_classes_);
+    Eigen::VectorXd cumulative_icu = Eigen::VectorXd::Zero(num_age_classes_);
+    double total_population = params.N.sum();
     
-    Eigen::MatrixXd age_specific_prevalence(sim_result.time_points.size(), num_age_classes_);
-    Eigen::VectorXd overall_prevalence_vec = Eigen::VectorXd::Zero(sim_result.time_points.size());
-    double total_population_N = params.N.sum();
-
-    for (size_t t = 0; t < sim_result.time_points.size(); ++t) {
-        double total_active_this_timestep = 0;
-        for (int age = 0; age < num_age_classes_; ++age) {
-            double active_in_age = metrics.hidden_compartments_median["P"](t, age) +
-                                   metrics.hidden_compartments_median["A"](t, age) +
-                                   metrics.hidden_compartments_median["I"](t, age) +
-                                   H_comp(t, age) +
-                                   ICU_comp(t, age);
-            age_specific_prevalence(t, age) = (params.N(age) > 0) ? active_in_age / params.N(age) : 0.0;
-            total_active_this_timestep += active_in_age;
-        }
-        overall_prevalence_vec(t) = (total_population_N > 0) ? total_active_this_timestep / total_population_N : 0.0;
-    }
-    metrics.prevalence_trajectories_median["age_specific"] = age_specific_prevalence;
-    metrics.prevalence_trajectories_median["overall"] = overall_prevalence_vec;
-
-
-    Eigen::VectorXd cumulative_infections_age = Eigen::VectorXd::Zero(num_age_classes_);
-    Eigen::VectorXd cumulative_hosp_age = Eigen::VectorXd::Zero(num_age_classes_);
-    Eigen::VectorXd cumulative_icu_age = Eigen::VectorXd::Zero(num_age_classes_);
-    metrics.seroprevalence_time = sim_result.time_points;
-    metrics.seroprevalence_median.resize(sim_result.time_points.size(), 0.0);
-
-    Eigen::VectorXd current_S = initial_state_.head(num_age_classes_);
-    Eigen::VectorXd current_E = initial_state_.segment(1 * num_age_classes_, num_age_classes_);
-    Eigen::VectorXd current_P = initial_state_.segment(2 * num_age_classes_, num_age_classes_);
-    Eigen::VectorXd current_A = initial_state_.segment(3 * num_age_classes_, num_age_classes_);
-    Eigen::VectorXd current_I = initial_state_.segment(4 * num_age_classes_, num_age_classes_);
-    Eigen::VectorXd current_H = initial_state_.segment(5 * num_age_classes_, num_age_classes_);
-
-    for (size_t t_idx = 0; t_idx < sim_result.time_points.size(); ++t_idx) {
-        double time_t = sim_result.time_points[t_idx];
-        double dt = (t_idx > 0) ? (time_t - sim_result.time_points[t_idx - 1]) : 0.0;
-        if (t_idx == 0 && sim_result.time_points.size() > 1) { 
-             dt = sim_result.time_points[1] - sim_result.time_points[0];
-        }
-
-
-        for(int age=0; age < num_age_classes_; ++age) {
-            current_S(age) = sim_result.solution[t_idx][0 * num_age_classes_ + age];
-            current_P(age) = sim_result.solution[t_idx][2 * num_age_classes_ + age];
-            current_A(age) = sim_result.solution[t_idx][3 * num_age_classes_ + age];
-            current_I(age) = sim_result.solution[t_idx][4 * num_age_classes_ + age];
-            current_H(age) = sim_result.solution[t_idx][5 * num_age_classes_ + age];
-        }
-        
-        double kappa_t = current_model_for_rn->getNpiStrategy()->getReductionFactor(time_t);
-        Eigen::VectorXd infectious_load_per_capita = Eigen::VectorXd::Zero(num_age_classes_);
-        for (int j = 0; j < num_age_classes_; ++j) {
-            if (params.N(j) > 1e-9) {
-                infectious_load_per_capita(j) = (current_P(j) + current_A(j) + params.theta * current_I(j)) / params.N(j);
-            }
-        }
-        Eigen::VectorXd lambda_t = params.beta * kappa_t * params.M_baseline * infectious_load_per_capita;
-        lambda_t = lambda_t.cwiseMax(0.0);
-        Eigen::VectorXd new_infections_rate_t = lambda_t.array() * current_S.array();
-
-        if (dt > 0) {
-            cumulative_infections_age += new_infections_rate_t * dt;
-            cumulative_hosp_age += (params.h.array() * current_I.array() * dt).matrix();
-            cumulative_icu_age += (params.icu.array() * current_H.array() * dt).matrix();
-        }
-        
-        if (total_population_N > 0) {
-            metrics.seroprevalence_median[t_idx] = cumulative_infections_age.sum() / total_population_N;
-        }
-    }
-
-    Eigen::Map<const Eigen::VectorXd> D_final(&sim_result.solution.back()[8 * num_age_classes_], num_age_classes_);
-    Eigen::Map<const Eigen::VectorXd> D_initial(&initial_state_[8 * num_age_classes_], num_age_classes_);
-    Eigen::VectorXd cumulative_deaths_age = D_final - D_initial;
-    metrics.total_cumulative_deaths = cumulative_deaths_age.sum();
-
-
-    for (int age = 0; age < num_age_classes_; ++age) {
-        std::string age_key = "age_" + std::to_string(age);
-        metrics.age_specific_attack_rate[age_key] = (params.N(age) > 0) ? cumulative_infections_age(age) / params.N(age) : 0.0;
-        if (cumulative_infections_age(age) > 1e-9) {
-            metrics.age_specific_IFR[age_key] = cumulative_deaths_age(age) / cumulative_infections_age(age);
-            metrics.age_specific_IHR[age_key] = cumulative_hosp_age(age) / cumulative_infections_age(age);
-            metrics.age_specific_IICUR[age_key] = cumulative_icu_age(age) / cumulative_infections_age(age);
-        } else {
-            metrics.age_specific_IFR[age_key] = 0.0;
-            metrics.age_specific_IHR[age_key] = 0.0;
-            metrics.age_specific_IICUR[age_key] = 0.0;
-        }
-    }
-    
-    metrics.overall_attack_rate = (total_population_N > 0) ? cumulative_infections_age.sum() / total_population_N : 0.0;
-    metrics.overall_IFR = (cumulative_infections_age.sum() > 1e-9) ? cumulative_deaths_age.sum() / cumulative_infections_age.sum() : 0.0;
-
+    // Variables for tracking peaks and Rt
     metrics.peak_hospital_occupancy = 0.0;
     metrics.peak_ICU_occupancy = 0.0;
-    for(size_t t_idx = 0; t_idx < sim_result.time_points.size(); ++t_idx) {
-        double current_total_H = H_comp.row(t_idx).sum();
-        double current_total_ICU = ICU_comp.row(t_idx).sum();
-        if (current_total_H > metrics.peak_hospital_occupancy) {
-            metrics.peak_hospital_occupancy = current_total_H;
-            metrics.time_to_peak_hospital = sim_result.time_points[t_idx];
-        }
-        if (current_total_ICU > metrics.peak_ICU_occupancy) {
-            metrics.peak_ICU_occupancy = current_total_ICU;
-            metrics.time_to_peak_ICU = sim_result.time_points[t_idx];
+    
+    // Target day for seroprevalence (day 64 = May 4th)
+    const double target_day = 64.0;
+    size_t target_idx = 0;
+    for (size_t i = 0; i < time_points_.size(); ++i) {
+        if (std::abs(time_points_[i] - target_day) < 0.5) {
+            target_idx = i;
+            break;
         }
     }
-
-    if (params.kappa_values.size() == params.kappa_end_times.size()) {
-        for (size_t i = 0; i < params.kappa_values.size(); ++i) {
-             metrics.kappa_values["kappa_" + std::to_string(i + 1)] = params.kappa_values[i];
+    
+    // Process simulation timestep by timestep
+    for (size_t t = 0; t < time_points_.size(); ++t) {
+        double time_t = time_points_[t];
+        double dt = (t > 0) ? (time_t - time_points_[t-1]) : 1.0;
+        
+        // Extract current state
+        Eigen::Map<const Eigen::VectorXd> S_t(&sim_result.solution[t][0 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> P_t(&sim_result.solution[t][2 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> A_t(&sim_result.solution[t][3 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> I_t(&sim_result.solution[t][4 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> H_t(&sim_result.solution[t][5 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> ICU_t(&sim_result.solution[t][6 * num_age_classes_], num_age_classes_);
+        
+        // Calculate Rt
+        double Rt = rn_calc.calculateRt(S_t, time_t);
+        metrics.max_Rt = std::max(metrics.max_Rt, Rt);
+        metrics.min_Rt = std::min(metrics.min_Rt, Rt);
+        if (t == time_points_.size() - 1) metrics.final_Rt = Rt;
+        
+        // Track peaks
+        double total_H = H_t.sum();
+        double total_ICU = ICU_t.sum();
+        if (total_H > metrics.peak_hospital_occupancy) {
+            metrics.peak_hospital_occupancy = total_H;
+            metrics.time_to_peak_hospital = time_t;
+        }
+        if (total_ICU > metrics.peak_ICU_occupancy) {
+            metrics.peak_ICU_occupancy = total_ICU;
+            metrics.time_to_peak_ICU = time_t;
+        }
+        
+        // Accumulate flows
+        double kappa_t = run_model->getNpiStrategy()->getReductionFactor(time_t);
+        Eigen::VectorXd infectious_load = Eigen::VectorXd::Zero(num_age_classes_);
+        for (int j = 0; j < num_age_classes_; ++j) {
+            if (params.N(j) > 1e-9) {
+                infectious_load(j) = (P_t(j) + A_t(j) + params.theta * I_t(j)) / params.N(j);
+            }
+        }
+        Eigen::VectorXd lambda_t = params.beta * kappa_t * params.M_baseline * infectious_load;
+        Eigen::VectorXd new_infections = lambda_t.array() * S_t.array() * dt;
+        
+        cumulative_infections += new_infections;
+        cumulative_hosp += (params.h.array() * I_t.array() * dt).matrix();
+        cumulative_icu += (params.icu.array() * H_t.array() * dt).matrix();        
+        // Seroprevalence at target day
+        if (t == target_idx) {
+            metrics.seroprevalence_at_target_day = cumulative_infections.sum() / total_population;
         }
     }
+    
+    // Final metrics
+    Eigen::Map<const Eigen::VectorXd> D_final(&sim_result.solution.back()[8 * num_age_classes_], num_age_classes_);
+    Eigen::Map<const Eigen::VectorXd> D_initial(&initial_state_[8 * num_age_classes_], num_age_classes_);
+    Eigen::VectorXd cumulative_deaths = D_final - D_initial;
+    
+    metrics.total_cumulative_deaths = cumulative_deaths.sum();
+    metrics.overall_attack_rate = cumulative_infections.sum() / total_population;
+    metrics.overall_IFR = (cumulative_infections.sum() > 1e-9) ? 
+        cumulative_deaths.sum() / cumulative_infections.sum() : 0.0;
+    
+    // Age-specific metrics
+    for (int age = 0; age < num_age_classes_; ++age) {
+        metrics.age_specific_attack_rate[age] = (params.N(age) > 0) ? 
+            cumulative_infections(age) / params.N(age) : 0.0;
+        
+        if (cumulative_infections(age) > 1e-9) {
+            metrics.age_specific_IFR[age] = cumulative_deaths(age) / cumulative_infections(age);
+            metrics.age_specific_IHR[age] = cumulative_hosp(age) / cumulative_infections(age);
+            metrics.age_specific_IICUR[age] = cumulative_icu(age) / cumulative_infections(age);
+        } else {
+            metrics.age_specific_IFR[age] = 0.0;
+            metrics.age_specific_IHR[age] = 0.0;
+            metrics.age_specific_IICUR[age] = 0.0;
+        }
+    }
+    
+    // Kappa values
+    for (size_t i = 0; i < params.kappa_values.size(); ++i) {
+        metrics.kappa_values["kappa_" + std::to_string(i + 1)] = params.kappa_values[i];
+    }
+    
     return metrics;
 }
 
-
-std::vector<PostCalibrationMetrics> PostCalibrationAnalyser::analyzeMCMCRuns(
+void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
     const std::vector<Eigen::VectorXd>& param_samples,
     IParameterManager& param_manager,
-    int num_samples_to_process,
     int burn_in,
     int thinning,
-    bool save_individual_mcmc_run_details) {
-
-    std::vector<PostCalibrationMetrics> all_metrics;
+    int batch_size) {
+    
     if (param_samples.empty()) {
-        Logger::getInstance().warning("PostCalibrationAnalyser::analyzeMCMCRuns", "No MCMC samples provided.");
-        return all_metrics;
+        Logger::getInstance().warning("PostCalibrationAnalyser", "No MCMC samples provided.");
+        return;
     }
-
-    int n_params = param_manager.getParameterCount();
-    int total_available_samples = param_samples.size();
     
-    int effective_start_index = burn_in;
-    if (effective_start_index >= total_available_samples) {
-        Logger::getInstance().warning("PostCalibrationAnalyser::analyzeMCMCRuns", "Burn-in period is too large for the number of samples.");
-        return all_metrics;
+    int total_samples = param_samples.size();
+    int effective_start = burn_in;
+    if (effective_start >= total_samples) {
+        Logger::getInstance().warning("PostCalibrationAnalyser", "Burn-in too large for sample size.");
+        return;
     }
-
-    int samples_after_burn_in = total_available_samples - effective_start_index;
-    int max_possible_thinned_samples = (samples_after_burn_in + thinning -1) / thinning;
-
-
-    int actual_samples_to_process = (num_samples_to_process == -1) ? max_possible_thinned_samples : std::min(num_samples_to_process, max_possible_thinned_samples);
     
-    all_metrics.reserve(actual_samples_to_process);
+    // Create batch directory
+    ensureOutputSubdirectoryExists("mcmc_batches");
     
-    Logger::getInstance().info("PostCalibrationAnalyser::analyzeMCMCRuns", "Processing " + std::to_string(actual_samples_to_process) +
-                               " MCMC samples (Burn-in: " + std::to_string(burn_in) + ", Thinning: " + std::to_string(thinning) + ").");
-
-    for (int i = 0; i < actual_samples_to_process; ++i) {
-        int sample_idx = effective_start_index + i * thinning;
-        if (sample_idx >= total_available_samples) break; 
-
-        const Eigen::VectorXd& current_param_vec = param_samples[sample_idx];
-        if (current_param_vec.size() != n_params) {
-            Logger::getInstance().warning("PostCalibrationAnalyser::analyzeMCMCRuns", "Parameter vector size mismatch for sample " + std::to_string(sample_idx) + ". Skipping.");
-            continue;
-        }
-
-        param_manager.updateModelParameters(current_param_vec);
-        SEPAIHRDParameters current_params_struct = model_template_->getModelParameters(); // Get full struct after update
-
-        std::string run_id = "mcmc_sample_" + std::to_string(sample_idx);
-        PostCalibrationMetrics metrics = analyzeSingleRun(current_params_struct, run_id);
-        all_metrics.push_back(metrics);
-
-        if (save_individual_mcmc_run_details) {
-            ensureOutputSubdirectoryExists("mcmc_individual_runs/" + run_id);
-            saveScalarMetricsCSV(FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "mcmc_individual_runs/" + run_id), "scalar_metrics.csv"), metrics);
+    // Process samples in batches
+    int batch_count = 0;
+    int processed_samples = 0;
+    
+    for (int start_idx = effective_start; start_idx < total_samples; start_idx += batch_size * thinning) {
+        std::vector<EssentialMetrics> batch_metrics;
+        batch_metrics.reserve(batch_size);
+        
+        // Process current batch
+        for (int i = 0; i < batch_size && (start_idx + i * thinning) < total_samples; ++i) {
+            int sample_idx = start_idx + i * thinning;
+            
+            const Eigen::VectorXd& param_vec = param_samples[sample_idx];
+            param_manager.updateModelParameters(param_vec);
+            SEPAIHRDParameters params = model_template_->getModelParameters();
+            
+            std::string run_id = "mcmc_sample_" + std::to_string(sample_idx);
+            EssentialMetrics metrics = analyzeSingleRunLightweight(params, run_id);
+            batch_metrics.push_back(metrics);
+            processed_samples++;
+            
+            if (processed_samples % 10 == 0) {
+                Logger::getInstance().info("PostCalibrationAnalyser", 
+                    "Processed " + std::to_string(processed_samples) + " samples...");
+            }
         }
         
-        if ((i + 1) % (std::max(1, actual_samples_to_process / 10)) == 0) {
-            Logger::getInstance().info("PostCalibrationAnalyser::analyzeMCMCRuns", "Processed " + std::to_string(i + 1) + "/" + std::to_string(actual_samples_to_process) + " samples.");
-        }
+        // Save batch results
+        processAndSaveBatch(batch_metrics, batch_count, "mcmc_batches");
+        batch_count++;
+        
+        // Clear batch memory
+        batch_metrics.clear();
+        batch_metrics.shrink_to_fit();
     }
-    return all_metrics;
+    
+    // Aggregate results from all batches
+    Logger::getInstance().info("PostCalibrationAnalyser", "Aggregating results from " + 
+                              std::to_string(batch_count) + " batches...");
+    aggregateBatchResults("mcmc_batches", batch_count);
+    
+    // ENE-COVID validation using aggregated results
+    ensureOutputSubdirectoryExists("seroprevalence");
+    performENECOVIDValidationFromBatches("mcmc_batches", batch_count);
 }
 
-PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChecks(
+PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChecksOptimized(
     const std::vector<Eigen::VectorXd>& param_samples,
     IParameterManager& param_manager,
     int num_samples_for_ppc) {
-
+    
+    Logger::getInstance().info("PostCalibrationAnalyser", "Starting optimized PPC generation...");
+    
     PosteriorPredictiveData ppd_data;
     ppd_data.time_points = time_points_;
-
+    
+    // Fill observed data
     ppd_data.daily_hospitalizations.observed = observed_data_.getNewHospitalizations();
     ppd_data.daily_icu_admissions.observed = observed_data_.getNewICU();
     ppd_data.daily_deaths.observed = observed_data_.getNewDeaths();
@@ -381,452 +335,330 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
     ppd_data.cumulative_deaths.observed = observed_data_.getCumulativeDeaths();
     
     if (param_samples.empty()) {
-        Logger::getInstance().warning("PostCalibrationAnalyser::generatePosteriorPredictiveChecks", "No MCMC samples provided.");
-        int T = time_points_.size();
-        int A = num_age_classes_;
-        auto nan_matrix = Eigen::MatrixXd::Constant(T, A, std::nan(""));
-        ppd_data.daily_hospitalizations.median = nan_matrix; 
-        ppd_data.daily_hospitalizations.lower_90 = nan_matrix;
-        ppd_data.daily_hospitalizations.upper_90 = nan_matrix;
-        ppd_data.daily_hospitalizations.lower_95 = nan_matrix;
-        ppd_data.daily_hospitalizations.upper_95 = nan_matrix;
-        ppd_data.daily_icu_admissions.median = nan_matrix;
-        ppd_data.daily_icu_admissions.lower_90 = nan_matrix;
-        ppd_data.daily_icu_admissions.upper_90 = nan_matrix;
-        ppd_data.daily_icu_admissions.lower_95 = nan_matrix;
-        ppd_data.daily_icu_admissions.upper_95 = nan_matrix;
-        ppd_data.daily_deaths.median = nan_matrix;
-        ppd_data.daily_deaths.lower_90 = nan_matrix;
-        ppd_data.daily_deaths.upper_90 = nan_matrix;
-        ppd_data.daily_deaths.lower_95 = nan_matrix;
-        ppd_data.daily_deaths.upper_95 = nan_matrix;
-        ppd_data.cumulative_hospitalizations.median = nan_matrix;
-        ppd_data.cumulative_hospitalizations.lower_90 = nan_matrix;
-        ppd_data.cumulative_hospitalizations.upper_90 = nan_matrix;
-        ppd_data.cumulative_hospitalizations.lower_95 = nan_matrix;
-        ppd_data.cumulative_hospitalizations.upper_95 = nan_matrix;
-        ppd_data.cumulative_icu_admissions.median = nan_matrix;
-        ppd_data.cumulative_icu_admissions.lower_90 = nan_matrix;
-        ppd_data.cumulative_icu_admissions.upper_90 = nan_matrix;
-        ppd_data.cumulative_icu_admissions.lower_95 = nan_matrix;
-        ppd_data.cumulative_icu_admissions.upper_95 = nan_matrix;
-        ppd_data.cumulative_deaths.median = nan_matrix;
-        ppd_data.cumulative_deaths.lower_90 = nan_matrix;
-        ppd_data.cumulative_deaths.upper_90 = nan_matrix;
-        ppd_data.cumulative_deaths.lower_95 = nan_matrix;
-        ppd_data.cumulative_deaths.upper_95 = nan_matrix;
+        Logger::getInstance().warning("PostCalibrationAnalyser", "No samples for PPC.");
         return ppd_data;
     }
-
+    
+    int T = time_points_.size();
+    int A = num_age_classes_;
+    
+    // Initialize quantile accumulators
+    std::vector<std::vector<QuantileAccumulator>> hosp_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<QuantileAccumulator>> icu_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<QuantileAccumulator>> death_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<QuantileAccumulator>> c_hosp_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<QuantileAccumulator>> c_icu_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<QuantileAccumulator>> c_death_acc(T, std::vector<QuantileAccumulator>(A));
+    
+    // Select samples
     std::vector<int> selected_indices;
     if (num_samples_for_ppc > 0 && static_cast<size_t>(num_samples_for_ppc) < param_samples.size()) {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<> distrib(0, param_samples.size() - 1);
-        for (int i = 0; i < num_samples_for_ppc; ++i) selected_indices.push_back(distrib(gen));
+        selected_indices.reserve(num_samples_for_ppc);
+        for (int i = 0; i < num_samples_for_ppc; ++i) {
+            selected_indices.push_back(distrib(gen));
+        }
     } else {
         selected_indices.resize(param_samples.size());
         std::iota(selected_indices.begin(), selected_indices.end(), 0);
     }
-
-    std::vector<Eigen::MatrixXd> daily_hosp_preds, daily_icu_preds, daily_death_preds;
-    std::vector<Eigen::MatrixXd> cumul_hosp_preds, cumul_icu_preds, cumul_death_preds;
-
-    for (int sample_master_idx : selected_indices) {
-        const Eigen::VectorXd& p_vec = param_samples[sample_master_idx];
+    
+    // Reserve space for accumulators
+    int expected_samples = selected_indices.size();
+    for (int t = 0; t < T; ++t) {
+        for (int a = 0; a < A; ++a) {
+            hosp_acc[t][a].reserve(expected_samples);
+            icu_acc[t][a].reserve(expected_samples);
+            death_acc[t][a].reserve(expected_samples);
+            c_hosp_acc[t][a].reserve(expected_samples);
+            c_icu_acc[t][a].reserve(expected_samples);
+            c_death_acc[t][a].reserve(expected_samples);
+        }
+    }
+    
+    // Process samples one at a time
+    int processed = 0;
+    for (int sample_idx : selected_indices) {
+        const Eigen::VectorXd& p_vec = param_samples[sample_idx];
         param_manager.updateModelParameters(p_vec);
-        SEPAIHRDParameters current_params_struct = model_template_->getModelParameters();
-
+        SEPAIHRDParameters params = model_template_->getModelParameters();
+        
         auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
-        auto run_model = std::make_shared<AgeSEPAIHRDModel>(current_params_struct, run_npi_strategy);
-        AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_, time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
+        auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
+        AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_, 
+                                      time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
+        
         SimulationResult sim_result = simulator.run(initial_state_, time_points_);
-
-        Eigen::MatrixXd dh = calculateDailyIncidenceFlow(sim_result, current_params_struct, "hospitalizations");
-        Eigen::MatrixXd di = calculateDailyIncidenceFlow(sim_result, current_params_struct, "icu");
-        Eigen::MatrixXd dd = calculateDailyIncidenceFlow(sim_result, current_params_struct, "deaths");
-        daily_hosp_preds.push_back(dh);
-        daily_icu_preds.push_back(di);
-        daily_death_preds.push_back(dd);
-
-        cumul_hosp_preds.push_back(calculateCumulativeFromDaily(dh));
-        cumul_icu_preds.push_back(calculateCumulativeFromDaily(di));
-        cumul_death_preds.push_back(calculateCumulativeFromDaily(dd));
+        if (!sim_result.isValid()) continue;
+        
+        // Calculate daily incidence flows
+        Eigen::MatrixXd daily_hosp = Eigen::MatrixXd::Zero(T, A);
+        Eigen::MatrixXd daily_icu = Eigen::MatrixXd::Zero(T, A);
+        Eigen::MatrixXd daily_deaths = Eigen::MatrixXd::Zero(T, A);
+        
+        for (int t = 0; t < T; ++t) {
+            Eigen::Map<const Eigen::VectorXd> I_t(&sim_result.solution[t][4 * num_age_classes_], num_age_classes_);
+            Eigen::Map<const Eigen::VectorXd> H_t(&sim_result.solution[t][5 * num_age_classes_], num_age_classes_);
+            Eigen::Map<const Eigen::VectorXd> ICU_t(&sim_result.solution[t][6 * num_age_classes_], num_age_classes_);
+            
+            for (int age = 0; age < A; ++age) {
+                daily_hosp(t, age) = params.h(age) * I_t(age);
+                daily_icu(t, age) = params.icu(age) * H_t(age);
+                daily_deaths(t, age) = params.d_H(age) * H_t(age) + params.d_ICU(age) * ICU_t(age);
+            }
+        }
+        
+        // Accumulate values for quantile calculation
+        for (int t = 0; t < T; ++t) {
+            for (int a = 0; a < A; ++a) {
+                hosp_acc[t][a].add(daily_hosp(t, a));
+                icu_acc[t][a].add(daily_icu(t, a));
+                death_acc[t][a].add(daily_deaths(t, a));
+                
+                // Cumulative values
+                double c_h = (t > 0) ? c_hosp_acc[t-1][a].quantile(1.0) + daily_hosp(t, a) : daily_hosp(t, a);
+                double c_i = (t > 0) ? c_icu_acc[t-1][a].quantile(1.0) + daily_icu(t, a) : daily_icu(t, a);
+                double c_d = (t > 0) ? c_death_acc[t-1][a].quantile(1.0) + daily_deaths(t, a) : daily_deaths(t, a);
+                
+                c_hosp_acc[t][a].add(c_h);
+                c_icu_acc[t][a].add(c_i);
+                c_death_acc[t][a].add(c_d);
+            }
+        }
+        
+        processed++;
+        if (processed % 10 == 0) {
+            Logger::getInstance().info("PostCalibrationAnalyser", 
+                "PPC: Processed " + std::to_string(processed) + "/" + std::to_string(expected_samples) + " samples");
+        }
     }
-
-    if (!daily_hosp_preds.empty()) {
-        ppd_data.daily_hospitalizations.median = getQuantileMatrix(daily_hosp_preds, 0.5);
-        ppd_data.daily_hospitalizations.lower_90 = getQuantileMatrix(daily_hosp_preds, 0.05);
-        ppd_data.daily_hospitalizations.upper_90 = getQuantileMatrix(daily_hosp_preds, 0.95);
-        ppd_data.daily_hospitalizations.lower_95 = getQuantileMatrix(daily_hosp_preds, 0.025);
-        ppd_data.daily_hospitalizations.upper_95 = getQuantileMatrix(daily_hosp_preds, 0.975);
+    
+    // Compute quantiles
+    auto fillQuantiles = [&](PosteriorPredictiveData::IncidenceData& data,
+                            std::vector<std::vector<QuantileAccumulator>>& acc) {
+        data.median.resize(T, A);
+        data.lower_90.resize(T, A);
+        data.upper_90.resize(T, A);
+        data.lower_95.resize(T, A);
+        data.upper_95.resize(T, A);
         
-        ppd_data.daily_icu_admissions.median = getQuantileMatrix(daily_icu_preds, 0.5);
-        ppd_data.daily_icu_admissions.lower_90 = getQuantileMatrix(daily_icu_preds, 0.05);
-        ppd_data.daily_icu_admissions.upper_90 = getQuantileMatrix(daily_icu_preds, 0.95);
-        ppd_data.daily_icu_admissions.lower_95 = getQuantileMatrix(daily_icu_preds, 0.025);
-        ppd_data.daily_icu_admissions.upper_95 = getQuantileMatrix(daily_icu_preds, 0.975);
-        
-        ppd_data.daily_deaths.median = getQuantileMatrix(daily_death_preds, 0.5);
-        ppd_data.daily_deaths.lower_90 = getQuantileMatrix(daily_death_preds, 0.05);
-        ppd_data.daily_deaths.upper_90 = getQuantileMatrix(daily_death_preds, 0.95);
-        ppd_data.daily_deaths.lower_95 = getQuantileMatrix(daily_death_preds, 0.025);
-        ppd_data.daily_deaths.upper_95 = getQuantileMatrix(daily_death_preds, 0.975);
-        
-        ppd_data.cumulative_hospitalizations.median = getQuantileMatrix(cumul_hosp_preds, 0.5);
-        ppd_data.cumulative_hospitalizations.lower_90 = getQuantileMatrix(cumul_hosp_preds, 0.05);
-        ppd_data.cumulative_hospitalizations.upper_90 = getQuantileMatrix(cumul_hosp_preds, 0.95);
-        ppd_data.cumulative_hospitalizations.lower_95 = getQuantileMatrix(cumul_hosp_preds, 0.025);
-        ppd_data.cumulative_hospitalizations.upper_95 = getQuantileMatrix(cumul_hosp_preds, 0.975);
-        
-        ppd_data.cumulative_icu_admissions.median = getQuantileMatrix(cumul_icu_preds, 0.5);
-        ppd_data.cumulative_icu_admissions.lower_90 = getQuantileMatrix(cumul_icu_preds, 0.05);
-        ppd_data.cumulative_icu_admissions.upper_90 = getQuantileMatrix(cumul_icu_preds, 0.95);
-        ppd_data.cumulative_icu_admissions.lower_95 = getQuantileMatrix(cumul_icu_preds, 0.025);
-        ppd_data.cumulative_icu_admissions.upper_95 = getQuantileMatrix(cumul_icu_preds, 0.975);
-        
-        ppd_data.cumulative_deaths.median = getQuantileMatrix(cumul_death_preds, 0.5);
-        ppd_data.cumulative_deaths.lower_90 = getQuantileMatrix(cumul_death_preds, 0.05);
-        ppd_data.cumulative_deaths.upper_90 = getQuantileMatrix(cumul_death_preds, 0.95);
-        ppd_data.cumulative_deaths.lower_95 = getQuantileMatrix(cumul_death_preds, 0.025);
-        ppd_data.cumulative_deaths.upper_95 = getQuantileMatrix(cumul_death_preds, 0.975);
-        
-        Logger::getInstance().info("PostCalibrationAnalyser", "Posterior predictive checks completed using " + 
-                                  std::to_string(selected_indices.size()) + " samples.");
-    } else {
-        Logger::getInstance().warning("PostCalibrationAnalyser", "No predictions generated for posterior predictive checks.");
-    }
-
+        for (int t = 0; t < T; ++t) {
+            for (int a = 0; a < A; ++a) {
+                if (acc[t][a].size() > 0) {
+                    data.median(t, a) = acc[t][a].quantile(0.5);
+                    data.lower_90(t, a) = acc[t][a].quantile(0.05);
+                    data.upper_90(t, a) = acc[t][a].quantile(0.95);
+                    data.lower_95(t, a) = acc[t][a].quantile(0.025);
+                    data.upper_95(t, a) = acc[t][a].quantile(0.975);
+                } else {
+                    data.median(t, a) = NAN;
+                    data.lower_90(t, a) = NAN;
+                    data.upper_90(t, a) = NAN;
+                    data.lower_95(t, a) = NAN;
+                    data.upper_95(t, a) = NAN;
+                }
+                // Clear accumulator to free memory
+                acc[t][a].clear();
+            }
+        }
+    };
+    
+    fillQuantiles(ppd_data.daily_hospitalizations, hosp_acc);
+    fillQuantiles(ppd_data.daily_icu_admissions, icu_acc);
+    fillQuantiles(ppd_data.daily_deaths, death_acc);
+    fillQuantiles(ppd_data.cumulative_hospitalizations, c_hosp_acc);
+    fillQuantiles(ppd_data.cumulative_icu_admissions, c_icu_acc);
+    fillQuantiles(ppd_data.cumulative_deaths, c_death_acc);
+    
+    Logger::getInstance().info("PostCalibrationAnalyser", 
+        "PPC completed using " + std::to_string(processed) + " samples");
+    
     return ppd_data;
 }
 
-
-void PostCalibrationAnalyser::performScenarioAnalysis(
+void PostCalibrationAnalyser::performScenarioAnalysisOptimized(
     const SEPAIHRDParameters& baseline_params,
     const std::vector<std::pair<std::string, SEPAIHRDParameters>>& scenarios) {
-
-    Logger::getInstance().info("PostCalibrationAnalyser", "Performing scenario analysis...");
-    ensureOutputSubdirectoryExists("scenarios");
-
-    PostCalibrationMetrics baseline_metrics = analyzeSingleRun(baseline_params, "scenario_baseline");
-
-    std::vector<std::pair<std::string, PostCalibrationMetrics>> scenario_metrics_list;
-    for (const auto& scenario_pair : scenarios) {
-        const std::string& scenario_name = scenario_pair.first;
-        const SEPAIHRDParameters& scenario_params = scenario_pair.second;
-        Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing scenario: " + scenario_name);
-        PostCalibrationMetrics metrics = analyzeSingleRun(scenario_params, "scenario_" + scenario_name);
-        scenario_metrics_list.push_back({scenario_name, metrics});
-    }
     
-    saveScenarioComparisonCSV(baseline_metrics, scenario_metrics_list, "scenarios");
-
-    std::string death_traj_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "scenarios"), "cumulative_deaths_trajectories.csv");
-    std::ofstream d_file(death_traj_path);
-    d_file << "time,baseline_deaths";
-    for(const auto& sm_pair : scenario_metrics_list) d_file << "," << sm_pair.first << "_deaths";
-    d_file << "\n";
-
-    auto get_D_trajectory = [&](const SEPAIHRDParameters& p_struct) {
-        auto npi_s = model_template_->getNpiStrategy()->clone();
-        auto m = std::make_shared<AgeSEPAIHRDModel>(p_struct, npi_s);
-        AgeSEPAIHRDSimulator sim(m, solver_strategy_, time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
-        SimulationResult sr = sim.run(initial_state_, time_points_);
-        Eigen::MatrixXd D_comp = SimulationResultProcessor::getCompartmentData(sr, *m, "D", AgeSEPAIHRDSimulator::NUM_COMPARTMENTS);
-        return D_comp.rowwise().sum();
-    };
+    Logger::getInstance().info("PostCalibrationAnalyser", "Starting optimized scenario analysis...");
     
-    Eigen::VectorXd baseline_D_traj = get_D_trajectory(baseline_params);
-    std::vector<Eigen::VectorXd> scenario_D_trajs;
-    for(const auto& scen_pair : scenarios) scenario_D_trajs.push_back(get_D_trajectory(scen_pair.second));
-
-    for(size_t t=0; t < time_points_.size(); ++t) {
-        d_file << time_points_[t] << "," << baseline_D_traj(t);
-        for(const auto& scen_D_traj : scenario_D_trajs) d_file << "," << scen_D_traj(t);
-        d_file << "\n";
+    // Analyze baseline
+    EssentialMetrics baseline_metrics = analyzeSingleRunLightweight(baseline_params, "baseline");
+    
+    // Save comparison summary
+    std::string summary_path = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "scenarios"), "scenario_comparison.csv");
+    std::ofstream file(summary_path);
+    
+    file << "scenario,R0,overall_IFR,overall_attack_rate,peak_hospital,peak_ICU,"
+         << "time_to_peak_hospital,time_to_peak_ICU,total_deaths,seroprevalence_day64";
+    
+    // Add kappa headers
+    for (const auto& kappa_pair : baseline_metrics.kappa_values) {
+        file << "," << kappa_pair.first;
     }
-    d_file.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario death trajectories saved to: " + death_traj_path);
-
-
-    std::string rt_traj_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "scenarios"), "rt_trajectories.csv");
-    std::ofstream rt_file(rt_traj_path);
-    rt_file << "time,baseline_rt";
-     for(const auto& sm_pair : scenario_metrics_list) rt_file << "," << sm_pair.first << "_rt";
-    rt_file << "\n";
-    for(size_t t=0; t<baseline_metrics.Rt_time.size(); ++t) {
-        rt_file << baseline_metrics.Rt_time[t] << "," << baseline_metrics.Rt_median[t];
-        for(const auto& sm_pair : scenario_metrics_list) {
-            if (t < sm_pair.second.Rt_median.size()) rt_file << "," << sm_pair.second.Rt_median[t];
-            else rt_file << ","; // Missing data
+    file << "\n";
+    
+    // Write baseline
+    file << "baseline," << baseline_metrics.R0 << "," << baseline_metrics.overall_IFR << ","
+         << baseline_metrics.overall_attack_rate << "," << baseline_metrics.peak_hospital_occupancy << ","
+         << baseline_metrics.peak_ICU_occupancy << "," << baseline_metrics.time_to_peak_hospital << ","
+         << baseline_metrics.time_to_peak_ICU << "," << baseline_metrics.total_cumulative_deaths << ","
+         << baseline_metrics.seroprevalence_at_target_day;
+    
+    for (const auto& kappa_pair : baseline_metrics.kappa_values) {
+        file << "," << kappa_pair.second;
+    }
+    file << "\n";
+    
+    // Process scenarios
+    for (const auto& scenario : scenarios) {
+        Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing scenario: " + scenario.first);
+        EssentialMetrics scenario_metrics = analyzeSingleRunLightweight(scenario.second, scenario.first);
+        
+        file << scenario.first << "," << scenario_metrics.R0 << "," << scenario_metrics.overall_IFR << ","
+             << scenario_metrics.overall_attack_rate << "," << scenario_metrics.peak_hospital_occupancy << ","
+             << scenario_metrics.peak_ICU_occupancy << "," << scenario_metrics.time_to_peak_hospital << ","
+             << scenario_metrics.time_to_peak_ICU << "," << scenario_metrics.total_cumulative_deaths << ","
+             << scenario_metrics.seroprevalence_at_target_day;
+        
+        for (const auto& kappa_pair : baseline_metrics.kappa_values) {
+            if (scenario_metrics.kappa_values.count(kappa_pair.first)) {
+                file << "," << scenario_metrics.kappa_values.at(kappa_pair.first);
+            } else {
+                file << ",";
+            }
         }
-        rt_file << "\n";
+        file << "\n";
     }
-    rt_file.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario Rt trajectories saved to: " + rt_traj_path);
-
-
-    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario analysis complete.");
+    
+    file.close();
+    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario analysis saved to: " + summary_path);
 }
 
 void PostCalibrationAnalyser::validateAgainstENECOVID(
-    const std::vector<PostCalibrationMetrics>& all_run_metrics,
+    const std::vector<EssentialMetrics>& all_metrics,
     double ene_covid_target_day,
     double ene_covid_mean,
     double ene_covid_lower_ci,
     double ene_covid_upper_ci) {
-
-    ensureOutputSubdirectoryExists("seroprevalence");
-    std::string filepath = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "seroprevalence"), "ene_covid_validation.csv");
     
-    if (all_run_metrics.empty()) {
-        Logger::getInstance().warning("PostCalibrationAnalyser::validateAgainstENECOVID", "No metrics provided for ENE-COVID validation.");
+    if (all_metrics.empty()) {
+        Logger::getInstance().warning("PostCalibrationAnalyser", "No metrics for ENE-COVID validation");
         return;
     }
-
-    std::vector<double> model_seroprevalences_at_target_day;
-    for (const auto& metrics : all_run_metrics) {
-        size_t target_idx = static_cast<size_t>(-1);
-        for (size_t t = 0; t < metrics.seroprevalence_time.size(); ++t) {
-            if (std::abs(metrics.seroprevalence_time[t] - ene_covid_target_day) < 0.5) { // Find closest time point
-                target_idx = t;
-                break;
-            }
-        }
-        if (target_idx != static_cast<size_t>(-1) && target_idx < metrics.seroprevalence_median.size()) {
-            model_seroprevalences_at_target_day.push_back(metrics.seroprevalence_median[target_idx]);
-        }
-    }
-
-    if (model_seroprevalences_at_target_day.empty()) {
-        Logger::getInstance().warning("PostCalibrationAnalyser::validateAgainstENECOVID", "Could not find model seroprevalence at target day " + std::to_string(ene_covid_target_day));
-        return;
-    }
-
-    std::sort(model_seroprevalences_at_target_day.begin(), model_seroprevalences_at_target_day.end());
     
-    double model_median = getQuantiles(model_seroprevalences_at_target_day, {0.5})[0];
-    double model_q025 = getQuantiles(model_seroprevalences_at_target_day, {0.025})[0];
-    double model_q975 = getQuantiles(model_seroprevalences_at_target_day, {0.975})[0];
+    // Collect seroprevalence values
+    std::vector<double> sero_values;
+    sero_values.reserve(all_metrics.size());
+    
+    for (const auto& m : all_metrics) {
+        sero_values.push_back(m.seroprevalence_at_target_day);
+    }
+    
+    std::sort(sero_values.begin(), sero_values.end());
+    
+    double model_median = sero_values[sero_values.size() / 2];
+    double model_q025 = sero_values[static_cast<size_t>(0.025 * sero_values.size())];
+    double model_q975 = sero_values[static_cast<size_t>(0.975 * sero_values.size())];
+    
+    std::string filepath = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "seroprevalence"), "ene_covid_validation.csv");
     
     std::ofstream file(filepath);
     file << "source,median_seroprevalence,lower_95ci,upper_95ci,target_day\n";
     file << std::fixed << std::setprecision(5);
     file << "Model," << model_median << "," << model_q025 << "," << model_q975 << "," << ene_covid_target_day << "\n";
-    file << "ENE_COVID," << ene_covid_mean << "," << ene_covid_lower_ci << "," << ene_covid_upper_ci << "," << ene_covid_target_day << "\n";
+    file << "ENE_COVID," << ene_covid_mean << "," << ene_covid_lower_ci << "," << ene_covid_upper_ci << "," 
+         << ene_covid_target_day << "\n";
     file.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "ENE-COVID validation results saved to: " + filepath);
+    
+    Logger::getInstance().info("PostCalibrationAnalyser", "ENE-COVID validation saved to: " + filepath);
 }
 
-
-void PostCalibrationAnalyser::saveParameterPosteriors(
+void PostCalibrationAnalyser::saveParameterPosteriorsStreaming(
     const std::vector<Eigen::VectorXd>& param_samples,
     IParameterManager& param_manager,
     int burn_in,
     int thinning) {
-
-    ensureOutputSubdirectoryExists("parameter_posteriors");
-    std::string samples_filepath = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "parameter_posteriors"), "posterior_samples.csv");
-    std::string summary_filepath = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, "parameter_posteriors"), "posterior_summary.csv");
-
-    const auto& param_names = param_manager.getParameterNames();
-
+    
+    const auto& param_names = param_manager.getParameterNames(); 
+    // Save posterior samples
+    std::string samples_filepath = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "parameter_posteriors"), "posterior_samples.csv");
     std::ofstream sfile(samples_filepath);
+    
+    // Write header
     sfile << "sample_index";
-    for(const auto& name : param_names) sfile << "," << name;
+    for (const auto& name : param_names) {
+        sfile << "," << name;
+    }
     sfile << "\n";
-
-    int saved_sample_count = 0;
+    
+    // Write samples
+    int saved_count = 0;
     for (size_t i = burn_in; i < param_samples.size(); i += thinning) {
-        sfile << saved_sample_count++;
+        sfile << saved_count++;
         for (int j = 0; j < param_samples[i].size(); ++j) {
             sfile << "," << std::scientific << std::setprecision(8) << param_samples[i][j];
         }
         sfile << "\n";
     }
     sfile.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "Posterior samples saved to: " + samples_filepath);
-
+    
+    // Compute and save summary statistics
+    std::string summary_filepath = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "parameter_posteriors"), "posterior_summary.csv");
     std::ofstream sumfile(summary_filepath);
     sumfile << "parameter,mean,median,std_dev,q025,q975\n";
     sumfile << std::fixed << std::setprecision(8);
-
+    
+    // Process one parameter at a time to minimize memory usage
     for (size_t p_idx = 0; p_idx < param_names.size(); ++p_idx) {
-        std::vector<double> p_values;
-        for (size_t i = burn_in; i < param_samples.size(); i += thinning) {
-             if (p_idx < static_cast<size_t>(param_samples[i].size())) {
-                p_values.push_back(param_samples[i][p_idx]);
-            }
-        }
-        if (p_values.empty()) continue;
-
-        std::sort(p_values.begin(), p_values.end());
-        double mean = std::accumulate(p_values.begin(), p_values.end(), 0.0) / p_values.size();
-        double median = getQuantiles(p_values, {0.5})[0];
-        double q025 = getQuantiles(p_values, {0.025})[0];
-        double q975 = getQuantiles(p_values, {0.975})[0];
+        std::vector<double> values;
+        values.reserve((param_samples.size() - burn_in) / thinning);
         
-        double sum_sq_diff = 0.0;
-        for(double val : p_values) sum_sq_diff += (val - mean) * (val - mean);
-        double std_dev = std::sqrt(sum_sq_diff / p_values.size());
-
-        sumfile << param_names[p_idx] << "," << mean << "," << median << "," << std_dev << "," << q025 << "," << q975 << "\n";
+        for (size_t i = burn_in; i < param_samples.size(); i += thinning) {
+            if (p_idx < static_cast<size_t>(param_samples[i].size())) {
+                values.push_back(param_samples[i][p_idx]);
+            }
+        }
+        
+        if (!values.empty()) {
+            std::sort(values.begin(), values.end());
+            double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+            double median = values[values.size() / 2];
+            double q025 = values[static_cast<size_t>(0.025 * values.size())];
+            double q975 = values[static_cast<size_t>(0.975 * values.size())];
+            
+            double sum_sq_diff = 0.0;
+            for (double val : values) {
+                sum_sq_diff += (val - mean) * (val - mean);
+            }
+            double std_dev = std::sqrt(sum_sq_diff / values.size());
+            
+            sumfile << param_names[p_idx] << "," << mean << "," << median << "," 
+                   << std_dev << "," << q025 << "," << q975 << "\n";
+        }
+        
+        // Clear values to free memory
+        values.clear();
+        values.shrink_to_fit();
     }
+    
     sumfile.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "Posterior summary saved to: " + summary_filepath);
+    Logger::getInstance().info("PostCalibrationAnalyser", "Parameter posteriors saved");
 }
 
+// Helper methods
 
-// --- Private Helper Implementations ---
-
-Eigen::MatrixXd PostCalibrationAnalyser::calculateDailyIncidenceFlow(
-    const SimulationResult& sim_result,
-    const SEPAIHRDParameters& params,
-    const std::string& type) {
-    
-    int T = sim_result.time_points.size();
-    Eigen::MatrixXd daily_flow = Eigen::MatrixXd::Zero(T, num_age_classes_);
-    int num_model_compartments = AgeSEPAIHRDSimulator::NUM_COMPARTMENTS;
-
-    Eigen::MatrixXd I_data = SimulationResultProcessor::getCompartmentData(sim_result, *model_template_, "I", num_model_compartments);
-    Eigen::MatrixXd H_data = SimulationResultProcessor::getCompartmentData(sim_result, *model_template_, "H", num_model_compartments);
-    Eigen::MatrixXd ICU_data = SimulationResultProcessor::getCompartmentData(sim_result, *model_template_, "ICU", num_model_compartments);
-
-
-    for (int t = 0; t < T; ++t) {
-        for (int age = 0; age < num_age_classes_; ++age) {
-            if (type == "hospitalizations") {
-                daily_flow(t, age) = params.h(age) * I_data(t, age);
-            } else if (type == "icu") {
-                daily_flow(t, age) = params.icu(age) * H_data(t, age);
-            } else if (type == "deaths") {
-                 daily_flow(t, age) = params.d_H(age) * H_data(t,age) + params.d_ICU(age) * ICU_data(t,age);
-            }
-        }
-    }
-     // For deaths, if we want *new* deaths, it's D(t) - D(t-1).
-    // The D compartment in SEPAIHRD is cumulative.
-    if (type == "deaths_from_D_compartment") { // Alternative death calculation
-        Eigen::MatrixXd D_data_cumulative = SimulationResultProcessor::getCompartmentData(sim_result, *model_template_, "D", num_model_compartments);
-        daily_flow.row(0) = D_data_cumulative.row(0) - initial_state_.segment(8 * num_age_classes_, num_age_classes_).transpose();
-        for (int t = 1; t < T; ++t) {
-            daily_flow.row(t) = D_data_cumulative.row(t) - D_data_cumulative.row(t-1);
-        }
-    }
-
-    return daily_flow.cwiseMax(0.0); // Ensure non-negative counts
-}
-
-Eigen::MatrixXd PostCalibrationAnalyser::calculateCumulativeFromDaily(const Eigen::MatrixXd& daily_incidence) {
-    Eigen::MatrixXd cumulative = daily_incidence;
-    for (int t = 1; t < daily_incidence.rows(); ++t) {
-        cumulative.row(t) += cumulative.row(t - 1);
-    }
-    return cumulative;
-}
-
-template<typename T>
-std::vector<T> PostCalibrationAnalyser::getQuantiles(const std::vector<T>& sorted_values, const std::vector<double>& quantiles_probs) {
-    std::vector<T> results;
-    if (sorted_values.empty()) return results;
-    for (double q_prob : quantiles_probs) {
-        int idx = static_cast<int>(q_prob * (sorted_values.size() -1) ); // -1 for 0-based index from count
-        idx = std::max(0, std::min(idx, static_cast<int>(sorted_values.size()) - 1));
-        results.push_back(sorted_values[idx]);
-    }
-    return results;
-}
-
-Eigen::MatrixXd PostCalibrationAnalyser::getQuantileMatrix(const std::vector<Eigen::MatrixXd>& matrix_samples, double quantile_prob) {
-    if (matrix_samples.empty()) return Eigen::MatrixXd();
-    int rows = matrix_samples[0].rows();
-    int cols = matrix_samples[0].cols();
-    Eigen::MatrixXd quantile_matrix(rows, cols);
-
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            std::vector<double> values_at_rc;
-            values_at_rc.reserve(matrix_samples.size());
-            for (const auto& mat : matrix_samples) {
-                values_at_rc.push_back(mat(r, c));
-            }
-            std::sort(values_at_rc.begin(), values_at_rc.end());
-            quantile_matrix(r, c) = getQuantiles(values_at_rc, {quantile_prob})[0];
-        }
-    }
-    return quantile_matrix;
-}
-
-
-void PostCalibrationAnalyser::saveTimeSeriesCSV(
+void PostCalibrationAnalyser::saveEssentialMetricsCSV(
     const std::string& filepath,
-    const std::vector<std::string>& headers,
-    const std::vector<std::vector<double>>& data_columns) {
-    std::ofstream file(filepath);
-    if (!file.is_open()) {
-        Logger::getInstance().error("PostCalibrationAnalyser", "Failed to open file for writing: " + filepath);
-        return;
-    }
-
-    for (size_t i = 0; i < headers.size(); ++i) {
-        file << headers[i] << (i == headers.size() - 1 ? "" : ",");
-    }
-    file << "\n";
-
-    if (data_columns.empty() || data_columns[0].empty()) return;
-    size_t num_rows = data_columns[0].size();
-
-    for (size_t r = 0; r < num_rows; ++r) {
-        for (size_t c = 0; c < data_columns.size(); ++c) {
-            if (r < data_columns[c].size()) {
-                 file << std::fixed << std::setprecision(6) << data_columns[c][r];
-            } else {
-                 file << ""; // Missing data
-            }
-            file << (c == data_columns.size() - 1 ? "" : ",");
-        }
-        file << "\n";
-    }
-    file.close();
-}
-
-void PostCalibrationAnalyser::saveMatrixTimeSeriesCSV(
-    const std::string& filepath,
-    const std::vector<double>& time_vector,
-    const Eigen::MatrixXd& data_matrix,
-    const std::vector<std::string>& data_column_base_names) {
+    const EssentialMetrics& metrics) {
     
     std::ofstream file(filepath);
-     if (!file.is_open()) {
-        Logger::getInstance().error("PostCalibrationAnalyser", "Failed to open file for writing: " + filepath);
-        return;
-    }
-    file << "time";
-    for(const auto& base_name : data_column_base_names) {
-        for(int age=0; age < num_age_classes_; ++age) {
-            file << "," << base_name << "_age" << age;
-        }
-    }
-    file << "\n";
-
-    for(int t=0; t < data_matrix.rows(); ++t) {
-        file << time_vector[t];
-        for(int age=0; age < data_matrix.cols(); ++age) { 
-            file << "," << std::fixed << std::setprecision(6) << data_matrix(t, age);
-        }
-        file << "\n";
-    }
-    file.close();
-}
-
-void PostCalibrationAnalyser::saveScalarMetricsCSV(
-    const std::string& filepath,
-    const PostCalibrationMetrics& metrics) {
-    std::ofstream file(filepath);
-     if (!file.is_open()) {
-        Logger::getInstance().error("PostCalibrationAnalyser", "Failed to open file for writing: " + filepath);
-        return;
-    }
     file << "metric_name,value\n";
     file << std::fixed << std::setprecision(8);
     file << "R0," << metrics.R0 << "\n";
@@ -837,13 +669,223 @@ void PostCalibrationAnalyser::saveScalarMetricsCSV(
     file << "time_to_peak_hospital," << metrics.time_to_peak_hospital << "\n";
     file << "time_to_peak_ICU," << metrics.time_to_peak_ICU << "\n";
     file << "total_cumulative_deaths," << metrics.total_cumulative_deaths << "\n";
-
-    for(const auto& pair : metrics.age_specific_IFR) file << "IFR_" << pair.first << "," << pair.second << "\n";
-    for(const auto& pair : metrics.age_specific_IHR) file << "IHR_" << pair.first << "," << pair.second << "\n";
-    for(const auto& pair : metrics.age_specific_IICUR) file << "IICUR_" << pair.first << "," << pair.second << "\n";
-    for(const auto& pair : metrics.age_specific_attack_rate) file << "AttackRate_" << pair.first << "," << pair.second << "\n";
-    for(const auto& pair : metrics.kappa_values) file << pair.first << "," << pair.second << "\n";
+    file << "max_Rt," << metrics.max_Rt << "\n";
+    file << "min_Rt," << metrics.min_Rt << "\n";
+    file << "final_Rt," << metrics.final_Rt << "\n";
+    file << "seroprevalence_at_target_day," << metrics.seroprevalence_at_target_day << "\n";
+    
+    // Age-specific metrics
+    for (int age = 0; age < num_age_classes_; ++age) {
+        file << "IFR_age_" << age << "," << metrics.age_specific_IFR[age] << "\n";
+        file << "IHR_age_" << age << "," << metrics.age_specific_IHR[age] << "\n";
+        file << "IICUR_age_" << age << "," << metrics.age_specific_IICUR[age] << "\n";
+        file << "AttackRate_age_" << age << "," << metrics.age_specific_attack_rate[age] << "\n";
+    }
+    
+    // Kappa values
+    for (const auto& kappa_pair : metrics.kappa_values) {
+        file << kappa_pair.first << "," << kappa_pair.second << "\n";
+    }
+    
     file.close();
+}
+
+void PostCalibrationAnalyser::processAndSaveBatch(
+    const std::vector<EssentialMetrics>& batch_metrics,
+    int batch_index,
+    const std::string& batch_subdir) {
+    
+    std::string batch_file = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, batch_subdir),
+        "batch_" + std::to_string(batch_index) + ".csv");
+    
+    std::ofstream file(batch_file);
+    
+    // Write header
+    file << "sample_idx,R0,overall_IFR,overall_attack_rate,peak_hospital,peak_ICU,"
+         << "time_to_peak_hospital,time_to_peak_ICU,total_deaths,"
+         << "max_Rt,min_Rt,final_Rt,seroprevalence_day64";
+    
+    for (int age = 0; age < num_age_classes_; ++age) {
+        file << ",IFR_age_" << age << ",IHR_age_" << age 
+             << ",IICUR_age_" << age << ",AttackRate_age_" << age;
+    }
+    
+    if (!batch_metrics.empty() && !batch_metrics[0].kappa_values.empty()) {
+        for (const auto& kappa_pair : batch_metrics[0].kappa_values) {
+            file << "," << kappa_pair.first;
+        }
+    }
+    file << "\n";
+    
+    // Write data
+    for (size_t i = 0; i < batch_metrics.size(); ++i) {
+        const auto& m = batch_metrics[i];
+        file << i << "," << m.R0 << "," << m.overall_IFR << "," << m.overall_attack_rate
+             << "," << m.peak_hospital_occupancy << "," << m.peak_ICU_occupancy
+             << "," << m.time_to_peak_hospital << "," << m.time_to_peak_ICU
+             << "," << m.total_cumulative_deaths << "," << m.max_Rt
+             << "," << m.min_Rt << "," << m.final_Rt << "," << m.seroprevalence_at_target_day;
+        
+        for (int age = 0; age < num_age_classes_; ++age) {
+            file << "," << m.age_specific_IFR[age] << "," << m.age_specific_IHR[age]
+                 << "," << m.age_specific_IICUR[age] << "," << m.age_specific_attack_rate[age];
+        }
+        
+        for (const auto& kappa_pair : m.kappa_values) {
+            file << "," << kappa_pair.second;
+        }
+        file << "\n";
+    }
+    
+    file.close();
+}
+
+void PostCalibrationAnalyser::aggregateBatchResults(
+    const std::string& batch_subdir,
+    int num_batches) {
+    
+    // Define columns to aggregate
+    std::vector<std::string> scalar_columns = {
+        "R0", "overall_IFR", "overall_attack_rate", "peak_hospital", "peak_ICU",
+        "time_to_peak_hospital", "time_to_peak_ICU", "total_deaths",
+        "max_Rt", "min_Rt", "final_Rt", "seroprevalence_day64"
+    };
+    
+    // Add age-specific columns
+    for (int age = 0; age < num_age_classes_; ++age) {
+        scalar_columns.push_back("IFR_age_" + std::to_string(age));
+        scalar_columns.push_back("IHR_age_" + std::to_string(age));
+        scalar_columns.push_back("IICUR_age_" + std::to_string(age));
+        scalar_columns.push_back("AttackRate_age_" + std::to_string(age));
+    }
+    
+    // Create aggregated summary
+    std::string summary_path = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "mcmc_aggregated"), "metrics_summary.csv");
+    
+    std::ofstream summary_file(summary_path);
+    summary_file << "metric,mean,median,std_dev,q025,q975\n";
+    summary_file << std::fixed << std::setprecision(8);
+    
+    // Process each metric
+    for (const auto& col_name : scalar_columns) {
+        std::vector<double> all_values;
+        
+        // Read values from all batch files
+        for (int batch = 0; batch < num_batches; ++batch) {
+            std::string batch_file = FileUtils::joinPaths(
+                FileUtils::joinPaths(output_dir_base_, batch_subdir),
+                "batch_" + std::to_string(batch) + ".csv");
+            
+            std::ifstream file(batch_file);
+            std::string line;
+            std::getline(file, line); // Skip header
+            
+            // Find column index
+            std::istringstream header_stream(line);
+            std::string col;
+            int col_idx = -1;
+            int current_idx = 0;
+            while (std::getline(header_stream, col, ',')) {
+                if (col == col_name) {
+                    col_idx = current_idx;
+                    break;
+                }
+                current_idx++;
+            }
+            
+            if (col_idx >= 0) {
+                while (std::getline(file, line)) {
+                    std::istringstream data_stream(line);
+                    std::string value;
+                    for (int i = 0; i <= col_idx; ++i) {
+                        std::getline(data_stream, value, ',');
+                    }
+                    if (!value.empty()) {
+                        all_values.push_back(std::stod(value));
+                    }
+                }
+            }
+            file.close();
+        }
+        
+        // Compute statistics
+        if (!all_values.empty()) {
+            std::sort(all_values.begin(), all_values.end());
+            double mean = std::accumulate(all_values.begin(), all_values.end(), 0.0) / all_values.size();
+            double median = all_values[all_values.size() / 2];
+            double q025 = all_values[static_cast<size_t>(0.025 * all_values.size())];
+            double q975 = all_values[static_cast<size_t>(0.975 * all_values.size())];
+            
+            double sum_sq_diff = 0.0;
+            for (double val : all_values) {
+                sum_sq_diff += (val - mean) * (val - mean);
+            }
+            double std_dev = std::sqrt(sum_sq_diff / all_values.size());
+            
+            summary_file << col_name << "," << mean << "," << median << ","
+                        << std_dev << "," << q025 << "," << q975 << "\n";
+        }
+    }
+    
+    summary_file.close();
+    Logger::getInstance().info("PostCalibrationAnalyser", "Aggregated summary saved to: " + summary_path);
+}
+
+void PostCalibrationAnalyser::performENECOVIDValidationFromBatches(
+    const std::string& batch_subdir,
+    int num_batches) {
+    
+    std::vector<double> sero_values;
+    
+    // Collect seroprevalence values from all batches
+    for (int batch = 0; batch < num_batches; ++batch) {
+        std::string batch_file = FileUtils::joinPaths(
+            FileUtils::joinPaths(output_dir_base_, batch_subdir),
+            "batch_" + std::to_string(batch) + ".csv");
+        
+        std::ifstream file(batch_file);
+        std::string line;
+        std::getline(file, line); // Header
+        
+        // Find seroprevalence column
+        std::istringstream header_stream(line);
+        std::string col;
+        int sero_col_idx = -1;
+        int current_idx = 0;
+        while (std::getline(header_stream, col, ',')) {
+            if (col == "seroprevalence_day64") {
+                sero_col_idx = current_idx;
+                break;
+            }
+            current_idx++;
+        }
+        
+        if (sero_col_idx >= 0) {
+            while (std::getline(file, line)) {
+                std::istringstream data_stream(line);
+                std::string value;
+                for (int i = 0; i <= sero_col_idx; ++i) {
+                    std::getline(data_stream, value, ',');
+                }
+                if (!value.empty()) {
+                    sero_values.push_back(std::stod(value));
+                }
+            }
+        }
+        file.close();
+    }
+    
+    // Create lightweight metrics for validation
+    std::vector<EssentialMetrics> lightweight_metrics;
+    for (double sero : sero_values) {
+        EssentialMetrics m;
+        m.seroprevalence_at_target_day = sero;
+        lightweight_metrics.push_back(m);
+    }
+    
+    validateAgainstENECOVID(lightweight_metrics);
 }
 
 void PostCalibrationAnalyser::savePosteriorPredictiveCheckData(
@@ -851,284 +893,75 @@ void PostCalibrationAnalyser::savePosteriorPredictiveCheckData(
     const std::string& sub_directory) {
     
     ensureOutputSubdirectoryExists(sub_directory);
-    auto save_ppc_incidence = [&](const PosteriorPredictiveData::IncidenceData& data, const std::string& type_name) {
-        std::string fp_base = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), type_name);
-        saveMatrixTimeSeriesCSV(fp_base + "_median.csv", ppd_data.time_points, data.median, {"median"});
-        saveMatrixTimeSeriesCSV(fp_base + "_lower90.csv", ppd_data.time_points, data.lower_90, {"lower90"});
-        saveMatrixTimeSeriesCSV(fp_base + "_upper90.csv", ppd_data.time_points, data.upper_90, {"upper90"});
-        saveMatrixTimeSeriesCSV(fp_base + "_lower95.csv", ppd_data.time_points, data.lower_95, {"lower95"});
-        saveMatrixTimeSeriesCSV(fp_base + "_upper95.csv", ppd_data.time_points, data.upper_95, {"upper95"});
-        saveMatrixTimeSeriesCSV(fp_base + "_observed.csv", ppd_data.time_points, data.observed, {"observed"});
-    };
-
-    save_ppc_incidence(ppd_data.daily_hospitalizations, "daily_hospitalizations");
-    save_ppc_incidence(ppd_data.daily_icu_admissions, "daily_icu_admissions");
-    save_ppc_incidence(ppd_data.daily_deaths, "daily_deaths");
-    save_ppc_incidence(ppd_data.cumulative_hospitalizations, "cumulative_hospitalizations");
-    save_ppc_incidence(ppd_data.cumulative_icu_admissions, "cumulative_icu_admissions");
-    save_ppc_incidence(ppd_data.cumulative_deaths, "cumulative_deaths");
-    Logger::getInstance().info("PostCalibrationAnalyser", "Posterior predictive check data saved to subdirectory: " + sub_directory);
-}
-
-void PostCalibrationAnalyser::saveAggregatedMCMCMetrics(
-    const std::vector<PostCalibrationMetrics>& all_metrics,
-    const std::string& sub_directory) {
-
-    if (all_metrics.empty()) return;
-    ensureOutputSubdirectoryExists(sub_directory);
     
-    // --- Scalar Metrics Summary ---
-    std::string scalar_summary_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), "scalar_metrics_summary.csv");
-    std::ofstream ss_file(scalar_summary_path);
-    ss_file << "metric,mean,median,std_dev,q025,q975\n";
-    ss_file << std::fixed << std::setprecision(8);
-
-    auto write_scalar_summary = [&](const std::string& name, const std::vector<double>& values) {
-        if (values.empty()) return;
-        std::vector<double> sorted_v = values; std::sort(sorted_v.begin(), sorted_v.end());
-        double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
-        double median = getQuantiles(sorted_v, {0.5})[0];
-        double q025 = getQuantiles(sorted_v, {0.025})[0];
-        double q975 = getQuantiles(sorted_v, {0.975})[0];
-        double sum_sq_diff = 0.0; for(double val : values) sum_sq_diff += (val - mean) * (val - mean);
-        double std_dev = std::sqrt(sum_sq_diff / values.size());
-        ss_file << name << "," << mean << "," << median << "," << std_dev << "," << q025 << "," << q975 << "\n";
-    };
-    
-    std::vector<double> R0s, oIFRs, oARs, peakHs, peakICUs, timePHs, timePICUs, totDeaths;
-    for(const auto& m : all_metrics) { 
-        R0s.push_back(m.R0);
-        oIFRs.push_back(m.overall_IFR);
-        oARs.push_back(m.overall_attack_rate);
-        peakHs.push_back(m.peak_hospital_occupancy);
-        peakICUs.push_back(m.peak_ICU_occupancy);
-        timePHs.push_back(m.time_to_peak_hospital);
-        timePICUs.push_back(m.time_to_peak_ICU);
-        totDeaths.push_back(m.total_cumulative_deaths);
-    }
-    
-    write_scalar_summary("R0", R0s); 
-    write_scalar_summary("overall_IFR", oIFRs);
-    write_scalar_summary("overall_attack_rate", oARs);
-    write_scalar_summary("peak_hospital_occupancy", peakHs);
-    write_scalar_summary("peak_ICU_occupancy", peakICUs);
-    write_scalar_summary("time_to_peak_hospital", timePHs);
-    write_scalar_summary("time_to_peak_ICU", timePICUs);
-    write_scalar_summary("TotalCumulativeDeaths", totDeaths);
-
-    if (!all_metrics.empty() && !all_metrics[0].age_specific_IFR.empty()) {
-        for (const auto& age_pair : all_metrics[0].age_specific_IFR) {
-            std::vector<double> age_ifr_vals, age_ihr_vals, age_iicur_vals, age_ar_vals;
-            for (const auto& m : all_metrics) {
-                if (m.age_specific_IFR.count(age_pair.first)) {
-                    age_ifr_vals.push_back(m.age_specific_IFR.at(age_pair.first));
-                }
-                if (m.age_specific_IHR.count(age_pair.first)) {
-                    age_ihr_vals.push_back(m.age_specific_IHR.at(age_pair.first));
-                }
-                if (m.age_specific_IICUR.count(age_pair.first)) {
-                    age_iicur_vals.push_back(m.age_specific_IICUR.at(age_pair.first));
-                }
-                if (m.age_specific_attack_rate.count(age_pair.first)) {
-                    age_ar_vals.push_back(m.age_specific_attack_rate.at(age_pair.first));
-                }
+    auto saveIncidenceData = [&](const PosteriorPredictiveData::IncidenceData& data,
+                                const std::string& base_name) {
+        auto saveMatrix = [&](const Eigen::MatrixXd& matrix, const std::string& suffix) {
+            std::string filepath = FileUtils::joinPaths(
+                FileUtils::joinPaths(output_dir_base_, sub_directory),
+                base_name + "_" + suffix + ".csv");
+            
+            std::ofstream file(filepath);
+            file << "time";
+            for (int age = 0; age < epidemic::constants::DEFAULT_NUM_AGE_CLASSES; ++age) {
+                file << ",age_" << age;
             }
-            write_scalar_summary("IFR_" + age_pair.first, age_ifr_vals);
-            write_scalar_summary("IHR_" + age_pair.first, age_ihr_vals);
-            write_scalar_summary("IICUR_" + age_pair.first, age_iicur_vals);
-            write_scalar_summary("AttackRate_" + age_pair.first, age_ar_vals);
-        }
-    }
-
-    // Kappa values
-    if (!all_metrics.empty() && !all_metrics[0].kappa_values.empty()) {
-        for (const auto& kappa_pair : all_metrics[0].kappa_values) {
-            std::vector<double> k_vals;
-            for (const auto& m : all_metrics) {
-                if (m.kappa_values.count(kappa_pair.first)) {
-                    k_vals.push_back(m.kappa_values.at(kappa_pair.first));
+            file << "\n";
+            
+            for (size_t t = 0; t < ppd_data.time_points.size(); ++t) {
+                file << ppd_data.time_points[t];
+                for (int age = 0; age < epidemic::constants::DEFAULT_NUM_AGE_CLASSES; ++age) {
+                    file << "," << std::fixed << std::setprecision(6) << matrix(t, age);
                 }
+                file << "\n";
             }
-            write_scalar_summary(kappa_pair.first, k_vals);
-        }
-    }
-    ss_file.close();
-
-    // --- Time Series (Rt, Seroprevalence) ---
-    auto save_timeseries_summary = [&](const std::string& name, 
-                                       const std::function<const std::vector<double>*(const PostCalibrationMetrics&)>& getter,
-                                       const std::function<const std::vector<double>*(const PostCalibrationMetrics&)>& time_getter) {
-        std::vector<std::vector<double>> all_ts_values; // Each inner vector is one MCMC sample's trajectory
-        std::vector<double> time_points;
+            file.close();
+        };
         
-        for(const auto& m : all_metrics) {
-            const std::vector<double>* ts_ptr = getter(m);
-            if(ts_ptr && !ts_ptr->empty()) {
-                all_ts_values.push_back(*ts_ptr);
-                if (time_points.empty()) {
-                    const std::vector<double>* time_ptr = time_getter(m);
-                    if (time_ptr) time_points = *time_ptr;
-                }
-            }
-        }
-        if (all_ts_values.empty() || all_ts_values[0].empty()) return;
-
-        int T_len = all_ts_values[0].size();
-        std::vector<double> med_ts(T_len), q025_ts(T_len), q975_ts(T_len);
-        for(int t=0; t < T_len; ++t) {
-            std::vector<double> values_at_t;
-            for(const auto& ts : all_ts_values) if (t < (int)ts.size()) values_at_t.push_back(ts[t]);
-            std::sort(values_at_t.begin(), values_at_t.end());
-            if (!values_at_t.empty()) {
-                med_ts[t] = getQuantiles(values_at_t, {0.5})[0];
-                q025_ts[t] = getQuantiles(values_at_t, {0.025})[0];
-                q975_ts[t] = getQuantiles(values_at_t, {0.975})[0];
-            }
-        }
-        std::string ts_path = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), name + "_trajectory.csv");
-        saveTimeSeriesCSV(ts_path, {"time", "median", "q025", "q975"}, {time_points, med_ts, q025_ts, q975_ts});
+        saveMatrix(data.median, "median");
+        saveMatrix(data.lower_90, "lower90");
+        saveMatrix(data.upper_90, "upper90");
+        saveMatrix(data.lower_95, "lower95");
+        saveMatrix(data.upper_95, "upper95");
+        saveMatrix(data.observed, "observed");
     };
     
-    save_timeseries_summary("Rt", 
-                           [](const PostCalibrationMetrics& m){ return &m.Rt_median; },
-                           [](const PostCalibrationMetrics& m){ return &m.Rt_time; });
-    save_timeseries_summary("Seroprevalence", 
-                           [](const PostCalibrationMetrics& m){ return &m.seroprevalence_median; },
-                           [](const PostCalibrationMetrics& m){ return &m.seroprevalence_time; });
+    saveIncidenceData(ppd_data.daily_hospitalizations, "daily_hospitalizations");
+    saveIncidenceData(ppd_data.daily_icu_admissions, "daily_icu_admissions");
+    saveIncidenceData(ppd_data.daily_deaths, "daily_deaths");
+    saveIncidenceData(ppd_data.cumulative_hospitalizations, "cumulative_hospitalizations");
+    saveIncidenceData(ppd_data.cumulative_icu_admissions, "cumulative_icu_admissions");
+    saveIncidenceData(ppd_data.cumulative_deaths, "cumulative_deaths");
     
-    // --- Hidden Dynamics & Prevalence (median and CIs) ---
-    std::vector<std::string> hidden_comp_names = {"E", "P", "A", "I", "R"};
-    for (const auto& comp_name : hidden_comp_names) {
-        std::vector<Eigen::MatrixXd> all_comp_trajs;
-        for(const auto& m : all_metrics) {
-            if(m.hidden_compartments_median.count(comp_name)) {
-                all_comp_trajs.push_back(m.hidden_compartments_median.at(comp_name));
-            }
-        }
-        if (all_comp_trajs.empty()) continue;
-        Eigen::MatrixXd med_traj = getQuantileMatrix(all_comp_trajs, 0.5);
-        Eigen::MatrixXd q025_traj = getQuantileMatrix(all_comp_trajs, 0.025);
-        Eigen::MatrixXd q975_traj = getQuantileMatrix(all_comp_trajs, 0.975);
+    Logger::getInstance().info("PostCalibrationAnalyser", 
+        "Posterior predictive check data saved to: " + sub_directory);
+}
 
-        std::string comp_path_base = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), comp_name + "_hidden_dynamics");
-        std::vector<double> time_points = all_metrics[0].Rt_time;
-        saveMatrixTimeSeriesCSV(comp_path_base + "_median.csv", time_points, med_traj, {comp_name});
-        saveMatrixTimeSeriesCSV(comp_path_base + "_q025.csv", time_points, q025_traj, {comp_name});
-        saveMatrixTimeSeriesCSV(comp_path_base + "_q975.csv", time_points, q975_traj, {comp_name});
-    }
+Eigen::MatrixXd PostCalibrationAnalyser::calculateDailyIncidenceFlow(
+    const SimulationResult& sim_result,
+    const SEPAIHRDParameters& params,
+    const std::string& type) {
     
-    // --- Prevalence Trajectories ---
-    std::vector<std::string> prevalence_types = {"age_specific", "overall"};
-    for (const auto& prev_type : prevalence_types) {
-        std::vector<Eigen::MatrixXd> all_prev_trajs;
-        for(const auto& m : all_metrics) {
-            if(m.prevalence_trajectories_median.count(prev_type)) {
-                all_prev_trajs.push_back(m.prevalence_trajectories_median.at(prev_type));
-            }
-        }
-        if (all_prev_trajs.empty()) continue;
+    int T = sim_result.time_points.size();
+    Eigen::MatrixXd daily_flow = Eigen::MatrixXd::Zero(T, num_age_classes_);
+    
+    for (int t = 0; t < T; ++t) {
+        Eigen::Map<const Eigen::VectorXd> I_t(&sim_result.solution[t][4 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> H_t(&sim_result.solution[t][5 * num_age_classes_], num_age_classes_);
+        Eigen::Map<const Eigen::VectorXd> ICU_t(&sim_result.solution[t][6 * num_age_classes_], num_age_classes_);
         
-        Eigen::MatrixXd med_prev_traj = getQuantileMatrix(all_prev_trajs, 0.5);
-        Eigen::MatrixXd q025_prev_traj = getQuantileMatrix(all_prev_trajs, 0.025);
-        Eigen::MatrixXd q975_prev_traj = getQuantileMatrix(all_prev_trajs, 0.975);
-
-        std::string prev_path_base = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), "prevalence_" + prev_type);
-        std::vector<double> time_points = all_metrics[0].Rt_time;
-        saveMatrixTimeSeriesCSV(prev_path_base + "_median.csv", time_points, med_prev_traj, {"prevalence"});
-        saveMatrixTimeSeriesCSV(prev_path_base + "_q025.csv", time_points, q025_prev_traj, {"prevalence"});
-        saveMatrixTimeSeriesCSV(prev_path_base + "_q975.csv", time_points, q975_prev_traj, {"prevalence"});
-    }
-
-    Logger::getInstance().info("PostCalibrationAnalyser", "Aggregated MCMC metrics saved to subdirectory: " + sub_directory);
-}
-
-void PostCalibrationAnalyser::saveScenarioComparisonCSV(
-    const PostCalibrationMetrics& baseline_metrics,
-    const std::vector<std::pair<std::string, PostCalibrationMetrics>>& scenario_results,
-    const std::string& sub_directory) {
-
-    ensureOutputSubdirectoryExists(sub_directory);
-    std::string filepath = FileUtils::joinPaths(FileUtils::joinPaths(output_dir_base_, sub_directory), "scenario_comparison_summary.csv");
-    std::ofstream file(filepath);
-    file << "scenario_name,R0,overall_IFR,overall_attack_rate,peak_hospital_occupancy,peak_ICU_occupancy,time_to_peak_hospital,time_to_peak_ICU,total_cumulative_deaths";
-    // Add Kappa headers
-    if (!baseline_metrics.kappa_values.empty()) {
-        for (const auto& k_pair : baseline_metrics.kappa_values) file << "," << k_pair.first;
-    }
-    file << "\n";
-    file << std::fixed << std::setprecision(8);
-
-    auto write_metrics_row = [&](const std::string& name, const PostCalibrationMetrics& m) {
-        file << name << "," << m.R0 << "," << m.overall_IFR << "," << m.overall_attack_rate << ","
-             << m.peak_hospital_occupancy << "," << m.peak_ICU_occupancy << ","
-             << m.time_to_peak_hospital << "," << m.time_to_peak_ICU << "," << m.total_cumulative_deaths;
-        if (!m.kappa_values.empty()) {
-             for (const auto& k_pair_baseline : baseline_metrics.kappa_values) { // Use baseline for order
-                if (m.kappa_values.count(k_pair_baseline.first)) {
-                    file << "," << m.kappa_values.at(k_pair_baseline.first);
-                } else {
-                    file << ","; // Missing kappa
-                }
+        for (int age = 0; age < num_age_classes_; ++age) {
+            if (type == "hospitalizations") {
+                daily_flow(t, age) = params.h(age) * I_t(age);
+            } else if (type == "icu") {
+                daily_flow(t, age) = params.icu(age) * H_t(age);
+            } else if (type == "deaths") {
+                daily_flow(t, age) = params.d_H(age) * H_t(age) + params.d_ICU(age) * ICU_t(age);
             }
         }
-        file << "\n";
-    };
-    
-    write_metrics_row("baseline", baseline_metrics);
-    for(const auto& scen_pair : scenario_results) {
-        write_metrics_row(scen_pair.first, scen_pair.second);
-    }
-    file.close();
-    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario comparison summary saved to: " + filepath);
-}
-
-
-double PostCalibrationAnalyser::getTotalCumulativeDeathsFromSimulation(const SEPAIHRDParameters& params) {
-    auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
-    auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
-    AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_, time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
-    SimulationResult sim_result = simulator.run(initial_state_, time_points_);
-    
-    Eigen::Map<const Eigen::VectorXd> D_final(&sim_result.solution.back()[8 * num_age_classes_], num_age_classes_);
-    Eigen::Map<const Eigen::VectorXd> D_initial(&initial_state_[8 * num_age_classes_], num_age_classes_);
-    return (D_final - D_initial).sum();
-}
-
-// For scenario trajectory comparison
-Eigen::VectorXd PostCalibrationAnalyser::getOverallTrajectory(const SimulationResult& sim_result, int compartment_offset_multiplier) {
-    Eigen::VectorXd trajectory = Eigen::VectorXd::Zero(sim_result.time_points.size());
-    for(size_t t=0; t < sim_result.time_points.size(); ++t) {
-        double sum_val = 0;
-        for(int age=0; age < num_age_classes_; ++age) {
-            sum_val += sim_result.solution[t][compartment_offset_multiplier * num_age_classes_ + age];
-        }
-        trajectory(t) = sum_val;
-    }
-    return trajectory;
-}
-
-
-// Implement the missing extractMatchingTrajectories helper
-std::vector<Eigen::MatrixXd> PostCalibrationAnalyser::extractMatchingTrajectories(
-    const std::vector<std::map<std::string, Eigen::MatrixXd>>& all_trajectories_maps,
-    const std::string& key) {
-    
-    std::vector<Eigen::MatrixXd> matching_trajectories;
-    matching_trajectories.reserve(all_trajectories_maps.size());
-    
-    for (const auto& trajectory_map : all_trajectories_maps) {
-        auto it = trajectory_map.find(key);
-        if (it != trajectory_map.end()) {
-            matching_trajectories.push_back(it->second);
-        }
     }
     
-    return matching_trajectories;
+    return daily_flow.cwiseMax(0.0);
 }
-
-// Explicit template instantiation to fix linking issues
-template std::vector<double> PostCalibrationAnalyser::getQuantiles<double>(
-    const std::vector<double>& sorted_values, 
-    const std::vector<double>& quantiles_probs);
 
 } // namespace epidemic

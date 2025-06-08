@@ -3,8 +3,8 @@
 kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 300.0 305.0
 
 # --- Disease transmission parameters ---
-beta 0.25
-theta 0.5
+beta 0.4
+theta 0.6
 
 # --- Disease progression rates (inverse durations) ---
 # ~4 days latent period
@@ -22,7 +22,7 @@ gamma_ICU 0.07
 
 # --- NPI scaling factors (kappa_values) ---
 # kappa_1 is fixed
-kappa_values 1.0 0.25 0.6 0.8 1.1 1.4 0.4 0.9
+kappa_values 1.0 0.3 0.55 0.75 1.0 1.4 0.5 1.0
 
 # --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
 # Fraction asymptomatic (p)

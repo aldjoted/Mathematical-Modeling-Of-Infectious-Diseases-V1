@@ -3,11 +3,11 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 100
-iterations 50
+iterations 500
 
 # swarm_size: Number of particles in the swarm.
 # Default: 30
-swarm_size 100
+swarm_size 150
 
 # omega_start: Initial value of the inertia weight (omega). Used if use_constriction_factor is false.
 # Controls the influence of the particle's previous velocity.
@@ -38,22 +38,22 @@ c2_final 2.0
 
 # report_interval: Frequency (in iterations) for logging general progress reports.
 # Default: 10
-report_interval 10
+report_interval 50
 
 # use_lbest_topology: If true (1.0), particles are attracted to their local best neighbor (ring topology).
 # If false (0.0), particles are attracted to the global best (star topology).
 # Default: 0.0 (false)
-use_lbest_topology 3 
+use_lbest_topology 1.0 
 
 # lbest_neighborhood_k: If LBest topology is used, this defines the number of neighbors on each side (k).
 # Total neighborhood size is 2k+1 (particle itself + k left + k right).
 # Default: 1
-lbest_neighborhood_k 1
+lbest_neighborhood_k 5.0
 
 # use_constriction_factor: If true (1.0), uses Clerc's constriction factor for velocity updates, ignoring omega.
 # Helps ensure convergence.
 # Default: 0.0 (false)
-use_constriction_factor 0 
+use_constriction_factor 0.0 
 
 # log_new_gbest: If true (1.0), log a message every time a new global best solution is found.
 # Default: 1.0 (true)
@@ -61,7 +61,7 @@ log_new_gbest 0.0
 
 # log_particle_details: If true (1.0), log detailed info (position, velocity, fitness) for some particles.
 # Default: 0.0 (false)
-log_particle_details 0
+log_particle_details 0.0
 
 # particle_log_interval: Iteration interval for logging particle details, if log_particle_details is true.
 # Default: 10

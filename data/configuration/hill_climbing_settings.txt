@@ -3,7 +3,7 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 5000
-iterations 200000
+iterations 250000
 
 # initial_step: Initial coefficient for the step size.
 # Default: 1.0
@@ -48,7 +48,7 @@ report_interval 100
 # restart_interval: Iteration interval for performing a restart from the best-found solution.
 # 0 means no restarts.
 # Default: 0 
-restart_interval 20000
+restart_interval 25000
 
 # restart_resets_step: If true (1.0), reset the step size coefficient to its initial value upon restart.
 # Default: 1.0 (true)

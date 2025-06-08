@@ -3,9 +3,9 @@
 
 # --- Transmission Parameters ---
 # Baseline transmission rate
-beta    0.05   0.5
+beta    0.20   0.6
  # Relative transmissibility of symptomatic cases   
-theta   0.1    1.0  
+theta   0.3    1.0  
 
 # --- Disease Progression Rates (inverse durations in days) ---
 # 1/sigma = Latent period (e.g., 2-7 days)
@@ -55,7 +55,7 @@ d_ICU_3 0.2   0.60
 # --- NPI Scaling Factors (kappa_period_X) ---
 # kappa_1 is fixed at 1.0 (baseline)
 # Strict Lockdown
-kappa_2 0.1   0.5
+kappa_2 0.1   0.49
 # De-escalation Phase 1   
 kappa_3 0.3   0.8
 # De-escalation Phase 2   
@@ -65,6 +65,6 @@ kappa_5 0.8   1.3
 # Autumn Resurgence   
 kappa_6 1.0   1.8
 # Second State of Alarm  
-kappa_7 0.2   0.7
+kappa_7 0.2   0.8
 # End of Year   
-kappa_8 0.5   1.2   
+kappa_8 0.5   1.3   
