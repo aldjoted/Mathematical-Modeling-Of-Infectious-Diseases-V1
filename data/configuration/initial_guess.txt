@@ -1,37 +1,31 @@
-# SEPAIHRD Model Parameters - INITIAL GUESS (Epidemiologically Informed)
+# SEPAIHRD Model Parameters - INITIAL GUESS
 
 kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 300.0 305.0
 
 # --- Disease transmission parameters ---
-beta 0.4
-theta 0.6
+beta 0.2429961
+theta 0.3241170
 
 # --- Disease progression rates (inverse durations) ---
-# ~4 days latent period
-sigma 0.25 
-# ~2 days presymptomatic     
-gamma_p 0.5
-# ~10 days asymptomatic recovery     
-gamma_A 0.1
-# ~7 days symptomatic recovery     
-gamma_I 0.14
-# ~10 days hospital stay    
-gamma_H 0.1
-# ~14 days ICU stay     
-gamma_ICU 0.07 
+sigma 0.5000000
+gamma_p 1.0000000
+gamma_A 0.3000000
+gamma_I 0.3000000
+gamma_H 0.1200000
+gamma_ICU 0.0453937
 
 # --- NPI scaling factors (kappa_values) ---
 # kappa_1 is fixed
-kappa_values 1.0 0.3 0.55 0.75 1.0 1.4 0.5 1.0
+kappa_values 1.0000000 0.6826651 0.4000000 0.3000000 0.8644282 1.0000000 1.5000000 1.8000000
 
 # --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
 # Fraction asymptomatic (p)
-p 0.8 0.5 0.3 0.1
+p 0.6434228 0.6169785 0.6697631 0.6000000
 # Hospitalization rate (h)
-h 0.01 0.05 0.15 0.25
+h 0.0010000 0.0027978 0.0109444 0.0220544
 # ICU admission rate (icu)
-icu 0.05 0.15 0.25 0.15
+icu 0.0039875 0.0300000 0.0300000 0.0150000
 # Hospital mortality rate (d_H)
-d_H 0.01 0.03 0.1 0.20
+d_H 0.0010000 0.0050000 0.0171892 0.2375611
 # ICU mortality rate (d_ICU)
-d_ICU 0.05 0.15 0.3 0.45
+d_ICU 0.0012954 0.0108720 0.0500000 0.1000000

@@ -433,7 +433,7 @@ int main(int argc, char* argv[]) {
                 );
 
                 std::cout << "\n=== POST-CALIBRATION ANALYSIS COMPLETED SUCCESSFULLY ===" << std::endl;
-                std::cout << "Results and figures saved to: " << output_dir << std::endl;
+                std::cout << "Results saved to: " << output_dir << std::endl;
 
             } catch (const std::exception& e) {
                 Logger::getInstance().error("main", "Post-calibration analysis failed: " + std::string(e.what()));

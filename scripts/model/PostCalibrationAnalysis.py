@@ -1,6 +1,6 @@
 """
 Post-calibration analysis and visualization script for SEPAIHRD model outputs
-(Updated for memory-optimized C++ PostCalibrationAnalyser)
+(Updated to use aggregated trajectory data from memory-optimized C++ PostCalibrationAnalyser)
 """
 
 import pandas as pd
@@ -91,15 +91,15 @@ class SEPAIHRDAnalyzer:
 
             ax = axes[0]
             if all(df is not None for df in [median_df, lower95_df, upper95_df]):
-                median_total = median_df.filter(like='_age').sum(axis=1)
-                lower95_total = lower95_df.filter(like='_age').sum(axis=1)
-                upper95_total = upper95_df.filter(like='_age').sum(axis=1)
-                
+                median_total = median_df.filter(like='age_').sum(axis=1)
+                lower95_total = lower95_df.filter(like='age_').sum(axis=1)
+                upper95_total = upper95_df.filter(like='age_').sum(axis=1)
+
                 ax.plot(median_df['date'], median_total, label='Model Median', color='navy', lw=2)
                 ax.fill_between(median_df['date'], lower95_total, upper95_total, alpha=0.3, color='cornflowerblue', label='Model 95% CrI')
 
             if observed_df is not None:
-                observed_total = observed_df.filter(like='_age').sum(axis=1)
+                observed_total = observed_df.filter(like='age_').sum(axis=1)
                 ax.plot(observed_df['date'], observed_total, 'o', label='Observed Data', color='red', markersize=2, alpha=0.7)
 
             ax.set_title(f'Posterior Predictive Check: Daily {dtype.replace("_", " ").title()}', fontsize=14)
@@ -116,15 +116,15 @@ class SEPAIHRDAnalyzer:
 
             ax = axes[1]
             if all(df is not None for df in [median_cum_df, lower95_cum_df, upper95_cum_df]):
-                median_cum_total = median_cum_df.filter(like='_age').sum(axis=1)
-                lower95_cum_total = lower95_cum_df.filter(like='_age').sum(axis=1)
-                upper95_cum_total = upper95_cum_df.filter(like='_age').sum(axis=1)
+                median_cum_total = median_cum_df.filter(like='age_').sum(axis=1)
+                lower95_cum_total = lower95_cum_df.filter(like='age_').sum(axis=1)
+                upper95_cum_total = upper95_cum_df.filter(like='age_').sum(axis=1)
 
                 ax.plot(median_cum_df['date'], median_cum_total, label='Model Median', color='darkgreen', lw=2)
                 ax.fill_between(median_cum_df['date'], lower95_cum_total, upper95_cum_total, alpha=0.3, color='lightgreen', label='Model 95% CrI')
 
             if observed_cum_df is not None:
-                observed_cum_total = observed_cum_df.filter(like='_age').sum(axis=1)
+                observed_cum_total = observed_cum_df.filter(like='age_').sum(axis=1)
                 ax.plot(observed_cum_df['date'], observed_cum_total, 'o', label='Observed Data', color='sienna', markersize=2, alpha=0.7)
             
             ax.set_title(f'Posterior Predictive Check: {cum_dtype.replace("_", " ").title()}', fontsize=14)
@@ -177,7 +177,7 @@ class SEPAIHRDAnalyzer:
         samples_df = self._load_csv("parameter_posteriors", "posterior_samples.csv", check_time=False)
         if samples_df is None: return
         
-        params_to_plot = [p for p in samples_df.columns if p not in ['sample_id', 'objective_value']]
+        params_to_plot = [p for p in samples_df.columns if p not in ['sample_index', 'objective_value']]
         num_params = len(params_to_plot)
         cols = 5
         rows = int(np.ceil(num_params / cols))
@@ -187,9 +187,18 @@ class SEPAIHRDAnalyzer:
 
         for i, param_name in enumerate(params_to_plot):
             ax = axes[i]
-            sns.kdeplot(samples_df[param_name], ax=ax, fill=True, linewidth=1.5, color='crimson')
+            param_data = samples_df[param_name]
             
-            median_val = samples_df[param_name].median()
+            if param_data.var() == 0:
+                # Handle zero variance: plot a vertical line at the constant value
+                const_val = param_data.iloc[0]
+                ax.axvline(const_val, color='blue', linestyle='-', label=f'Constant: {const_val:.3g}')
+                ax.text(0.5, 0.5, "Zero variance", horizontalalignment='center', verticalalignment='center', transform=ax.transAxes, color='red')
+                print(f"Warning: Parameter '{param_name}' has zero variance. Plotting as constant.")
+            else:
+                sns.kdeplot(param_data, ax=ax, fill=True, linewidth=1.5, color='crimson', warn_singular=False)
+            
+            median_val = param_data.median()
             ax.axvline(median_val, color='black', linestyle='--', label=f'Median: {median_val:.3g}')
             
             ax.set_title(f'Posterior: {param_name}', fontsize=10)
@@ -205,23 +214,267 @@ class SEPAIHRDAnalyzer:
         plt.close(fig)
         print("Plotted KDEs for key parameter posteriors.")
 
+    def plot_reproduction_number_with_ci(self):
+        """Plot time-varying reproduction number with uncertainty bands."""
+        rt_df = self._load_csv("rt_trajectories", "Rt_aggregated_with_uncertainty.csv")
+        if rt_df is None:
+            print("Rt trajectory data not found.")
+            return
+        
+        rt_df['date'] = self.start_date + pd.to_timedelta(rt_df['time'], unit='D')
+        
+        fig, ax = plt.subplots(figsize=(15, 8))
+        
+        # Plot median with uncertainty bands
+        ax.plot(rt_df['date'], rt_df['median'], label='Median $R_t$', color='darkblue', lw=2)
+        ax.fill_between(rt_df['date'], rt_df['q025'], rt_df['q975'], 
+                       alpha=0.3, color='cornflowerblue', label='95% CrI')
+        ax.fill_between(rt_df['date'], rt_df['q05'], rt_df['q95'], 
+                       alpha=0.2, color='lightblue', label='90% CrI')
+        
+        # Add reference line at R=1
+        ax.axhline(y=1, color='red', linestyle='--', alpha=0.7, label='$R_t = 1$')
+        
+        ax.set_title('Time-Varying Reproduction Number $R_t$ with Uncertainty', fontsize=16)
+        ax.set_xlabel('Date', fontsize=14)
+        ax.set_ylabel('$R_t$', fontsize=14)
+        ax.set_ylim(0, ax.get_ylim()[1])
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+        self._format_date_axis(ax)
+        
+        plt.tight_layout()
+        plt.savefig(self.figures_dir / "Rt_trajectory_with_uncertainty.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print("Plotted Rt trajectory with uncertainty bands.")
+
+    def plot_seroprevalence_trajectory(self):
+        """Plot seroprevalence trajectory with uncertainty."""
+        sero_df = self._load_csv("seroprevalence", "seroprevalence_trajectory.csv")
+        if sero_df is None:
+            print("Seroprevalence trajectory data not found.")
+            return
+        
+        sero_df['date'] = self.start_date + pd.to_timedelta(sero_df['time'], unit='D')
+        
+        fig, ax = plt.subplots(figsize=(15, 8))
+        
+        # Plot median with uncertainty bands (convert to percentage)
+        ax.plot(sero_df['date'], sero_df['median'] * 100, label='Median Seroprevalence', 
+               color='darkgreen', lw=2)
+        ax.fill_between(sero_df['date'], sero_df['q025'] * 100, sero_df['q975'] * 100, 
+                       alpha=0.3, color='lightgreen', label='95% CrI')
+        
+        # Add ENE-COVID data point
+        ene_covid_date = pd.to_datetime('2020-05-04')
+        ax.scatter([ene_covid_date], [4.8], color='red', s=100, marker='o', 
+                  label='ENE-COVID (4.8%, 95% CI: 4.3-5.4%)', zorder=10)
+        ax.errorbar([ene_covid_date], [4.8], yerr=[[0.5], [0.6]], color='red', 
+                   fmt='none', capsize=5, capthick=2)
+        
+        ax.set_title('Seroprevalence Trajectory with Uncertainty', fontsize=16)
+        ax.set_xlabel('Date', fontsize=14)
+        ax.set_ylabel('Seroprevalence (%)', fontsize=14)
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+        
+        add_npi_shading(ax, periods=NPI_PERIODS_DEF)
+        self._format_date_axis(ax)
+        
+        plt.tight_layout()
+        plt.savefig(self.figures_dir / "seroprevalence_trajectory.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print("Plotted seroprevalence trajectory.")
+
+    def plot_scenario_trajectory_comparison(self):
+        """Plot scenario comparison for key trajectories."""
+        # Load scenario comparison data
+        scenario_df = self._load_csv("scenarios", "scenario_comparison.csv", check_time=False)
+        if scenario_df is None:
+            print("Scenario comparison data not found.")
+            return
+        
+        # Create a figure with key metrics comparison
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        
+        scenarios = scenario_df['scenario'].tolist()
+        metrics = [
+            ('R0', 'Basic Reproduction Number $R_0$'),
+            ('peak_hospital', 'Peak Hospital Occupancy'),
+            ('peak_ICU', 'Peak ICU Occupancy'),
+            ('total_deaths', 'Total Deaths')
+        ]
+        
+        for i, (metric, title) in enumerate(metrics):
+            ax = axes[i // 2, i % 2]
+            values = scenario_df[metric].tolist()
+            colors = ['gray', 'red', 'blue'][:len(scenarios)]
+            
+            bars = ax.bar(scenarios, values, color=colors, alpha=0.7)
+            ax.set_title(title, fontsize=14)
+            ax.set_ylabel(metric.replace('_', ' ').title(), fontsize=12)
+            ax.tick_params(axis='x', rotation=45)
+            
+            # Add value labels on bars
+            for bar, val in zip(bars, values):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{val:.2f}' if val < 100 else f'{int(val)}',
+                       ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.suptitle('Scenario Comparison: Key Epidemic Metrics', fontsize=16, y=1.02)
+        plt.savefig(self.figures_dir / "scenario_comparison.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print("Plotted scenario comparison.")
+
+    def plot_scenario_summary_bars(self):
+        """Plot summary bars for all scenarios."""
+        scenario_df = self._load_csv("scenarios", "scenario_comparison.csv", check_time=False)
+        if scenario_df is None:
+            print("Scenario data not found.")
+            return
+        
+        # Create normalized comparison
+        fig, ax = plt.subplots(figsize=(12, 8))
+        
+        # Normalize metrics relative to baseline
+        baseline_idx = scenario_df[scenario_df['scenario'] == 'baseline'].index[0]
+        metrics_to_normalize = ['peak_hospital', 'peak_ICU', 'total_deaths', 'overall_attack_rate']
+        
+        normalized_data = []
+        for idx, row in scenario_df.iterrows():
+            if idx != baseline_idx:
+                norm_values = []
+                for metric in metrics_to_normalize:
+                    baseline_val = scenario_df.loc[baseline_idx, metric]
+                    if baseline_val > 0:
+                        norm_val = (row[metric] - baseline_val) / baseline_val * 100
+                    else:
+                        norm_val = 0
+                    norm_values.append(norm_val)
+                normalized_data.append((row['scenario'], norm_values))
+        
+        # Plot grouped bars
+        x = np.arange(len(metrics_to_normalize))
+        width = 0.35
+        
+        for i, (scenario, values) in enumerate(normalized_data):
+            offset = width * (i - 0.5)
+            bars = ax.bar(x + offset, values, width, label=scenario.replace('_', ' ').title())
+            
+            # Add value labels
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.1f}%', ha='center', 
+                       va='bottom' if height > 0 else 'top')
+        
+        ax.set_ylabel('Relative Change from Baseline (%)', fontsize=12)
+        ax.set_title('Scenario Impact on Key Epidemic Metrics (Relative to Baseline)', fontsize=14)
+        ax.set_xticks(x)
+        ax.set_xticklabels([m.replace('_', ' ').title() for m in metrics_to_normalize])
+        ax.legend()
+        ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        plt.tight_layout()
+        plt.savefig(self.figures_dir / "scenario_impact_bars.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print("Plotted scenario impact bars.")
+
+    def generate_html_report(self):
+        """Generate a simple HTML report with all figures."""
+        html_content = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>SEPAIHRD Post-Calibration Analysis Report</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }} /* Ensure CSS is static */
+                h1, h2 {{ color: #333; }}
+                .figure {{ margin: 30px 0; text-align: center; }}
+                img {{ max-width: 100%; height: auto; border: 1px solid #ddd; }}
+                .description {{ margin: 10px 0; color: #666; }}
+            </style>
+        </head>
+        <body>
+            <h1>SEPAIHRD Model Post-Calibration Analysis Report</h1>
+            <p>Generated on: {date}</p>
+            
+            <h2>1. Posterior Predictive Checks</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/ppc_daily_hospitalizations.png">
+                <p class="description">Daily and cumulative hospitalizations: Model predictions vs observed data</p>
+            </div>
+            <div class="figure">
+                <img src="PostCalibrationFigures/ppc_daily_icu_admissions.png">
+                <p class="description">Daily and cumulative ICU admissions: Model predictions vs observed data</p>
+            </div>
+            <div class="figure">
+                <img src="PostCalibrationFigures/ppc_daily_deaths.png">
+                <p class="description">Daily and cumulative deaths: Model predictions vs observed data</p>
+            </div>
+            
+            <h2>2. Age-Specific Severity Metrics</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/age_specific_severity_metrics_bar_CI.png">
+                <p class="description">Age-stratified infection fatality, hospitalization, and ICU admission rates</p>
+            </div>
+            
+            <h2>3. Parameter Posterior Distributions</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/parameter_posteriors_kde.png">
+                <p class="description">Posterior distributions of key model parameters</p>
+            </div>
+            
+            <h2>4. Time-Varying Reproduction Number</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/Rt_trajectory_with_uncertainty.png">
+                <p class="description">Evolution of the effective reproduction number with uncertainty bands</p>
+            </div>
+            
+            <h2>5. Seroprevalence Trajectory</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/seroprevalence_trajectory.png">
+                <p class="description">Model-predicted seroprevalence over time with ENE-COVID validation</p>
+            </div>
+            
+            <h2>6. Scenario Analysis</h2>
+            <div class="figure">
+                <img src="PostCalibrationFigures/scenario_comparison.png">
+                <p class="description">Comparison of key metrics across different intervention scenarios</p>
+            </div>
+            <div class="figure">
+                <img src="PostCalibrationFigures/scenario_impact_bars.png">
+                <p class="description">Relative impact of scenarios compared to baseline</p>
+            </div>
+        </body>
+        </html>
+        """.format(date=pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'))
+        
+        report_path = self.figures_dir / "analysis_report.html"
+        with open(report_path, 'w') as f:
+            f.write(html_content)
+        print(f"Generated HTML report: {report_path}")
+
+
     def run_full_analysis(self):
         """Run complete analysis pipeline."""
         print("\n--- Starting Python Post-Calibration Analysis ---")
         
+        # All functions are now active
         self.plot_posterior_predictive_checks()
         self.plot_age_specific_severity_metrics_bar()
         self.plot_parameter_posteriors_kde()
+        self.plot_reproduction_number_with_ci()
+        self.plot_seroprevalence_trajectory()
+        self.plot_scenario_trajectory_comparison()
+        self.plot_scenario_summary_bars()
         
-        # Les autres plots dépendent de fichiers qui ne sont plus générés par la version optimisée
-        # Vous pouvez les réactiver si vous modifiez la sortie C++ pour créer ces fichiers agrégés
-        # self.plot_reproduction_number_with_ci() 
-        # self.plot_seroprevalence_trajectory()
-        # self.plot_hidden_compartments_aggregated()
-        # self.plot_scenario_trajectory_comparison()
-        # self.plot_scenario_summary_bars()
-        
-        # self.generate_html_report()
+        self.generate_html_report()
         
         print("\n--- Python Analysis Complete! ---")
         print(f"Figures saved to: {self.figures_dir}")

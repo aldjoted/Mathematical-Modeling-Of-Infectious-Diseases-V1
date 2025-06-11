@@ -12,6 +12,9 @@
 #include <cmath>
 #include <random>
 #include <sstream>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 namespace epidemic {
 
@@ -67,17 +70,25 @@ void PostCalibrationAnalyser::generateFullReport(
     // Clear PPC data from memory
     ppd_data = PosteriorPredictiveData();
     
-    // 2. MCMC Analysis in batches
+    // 2. MCMC Analysis in batches (now also saves trajectories)
     ensureOutputSubdirectoryExists("mcmc_batches");
+    ensureOutputSubdirectoryExists("mcmc_aggregated");
     Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing MCMC runs in batches...");
     analyzeMCMCRunsInBatches(param_samples, param_manager, burn_in_for_summary, thinning_for_summary, batch_size);
     
-    // 3. Parameter Posteriors with streaming
+    // 3. Aggregate trajectory results
+    ensureOutputSubdirectoryExists("rt_trajectories");
+    ensureOutputSubdirectoryExists("seroprevalence");
+    Logger::getInstance().info("PostCalibrationAnalyser", "Aggregating trajectory results...");
+    aggregateTrajectoryResults("rt_runs", "rt_trajectories/Rt_aggregated_with_uncertainty.csv");
+    aggregateTrajectoryResults("sero_runs", "seroprevalence/seroprevalence_trajectory.csv");
+    
+    // 4. Parameter Posteriors with streaming
     ensureOutputSubdirectoryExists("parameter_posteriors");
     Logger::getInstance().info("PostCalibrationAnalyser", "Saving parameter posteriors...");
     saveParameterPosteriorsStreaming(param_samples, param_manager, burn_in_for_summary, thinning_for_summary);
     
-    // 4. Scenario Analysis
+    // 5. Scenario Analysis
     ensureOutputSubdirectoryExists("scenarios");
     if (!param_samples.empty()) {
         Logger::getInstance().info("PostCalibrationAnalyser", "Performing scenario analysis...");
@@ -207,7 +218,8 @@ EssentialMetrics PostCalibrationAnalyser::analyzeSingleRunLightweight(
         
         cumulative_infections += new_infections;
         cumulative_hosp += (params.h.array() * I_t.array() * dt).matrix();
-        cumulative_icu += (params.icu.array() * H_t.array() * dt).matrix();        
+        cumulative_icu += (params.icu.array() * H_t.array() * dt).matrix();
+        
         // Seroprevalence at target day
         if (t == target_idx) {
             metrics.seroprevalence_at_target_day = cumulative_infections.sum() / total_population;
@@ -267,8 +279,10 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
         return;
     }
     
-    // Create batch directory
+    // Create batch directory and trajectory subdirectories
     ensureOutputSubdirectoryExists("mcmc_batches");
+    ensureOutputSubdirectoryExists("mcmc_batches/rt_runs");
+    ensureOutputSubdirectoryExists("mcmc_batches/sero_runs");
     
     // Process samples in batches
     int batch_count = 0;
@@ -287,6 +301,66 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
             SEPAIHRDParameters params = model_template_->getModelParameters();
             
             std::string run_id = "mcmc_sample_" + std::to_string(sample_idx);
+            
+            // Create model and run simulation for trajectory extraction
+            auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
+            auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
+            
+            AgeSEPAIHRDSimulator simulator(run_model, solver_strategy_, 
+                                          time_points_.front(), time_points_.back(), 1.0, 1e-6, 1e-6);
+            SimulationResult sim_result = simulator.run(initial_state_, time_points_);
+            
+            if (sim_result.isValid()) {
+                // Calculate and save Rt trajectory
+                ReproductionNumberCalculator rn_calc(run_model);
+                std::vector<double> rt_trajectory;
+                std::vector<double> sero_trajectory;
+                rt_trajectory.reserve(time_points_.size());
+                sero_trajectory.reserve(time_points_.size());
+                
+                Eigen::VectorXd cumulative_infections = Eigen::VectorXd::Zero(num_age_classes_);
+                double total_population = params.N.sum();
+                
+                for (size_t t = 0; t < time_points_.size(); ++t) {
+                    // Extract state at time t
+                    Eigen::Map<const Eigen::VectorXd> S_t(&sim_result.solution[t][0], num_age_classes_);
+                    Eigen::Map<const Eigen::VectorXd> P_t(&sim_result.solution[t][2 * num_age_classes_], num_age_classes_);
+                    Eigen::Map<const Eigen::VectorXd> A_t(&sim_result.solution[t][3 * num_age_classes_], num_age_classes_);
+                    Eigen::Map<const Eigen::VectorXd> I_t(&sim_result.solution[t][4 * num_age_classes_], num_age_classes_);
+                    
+                    // Calculate Rt
+                    double Rt = rn_calc.calculateRt(S_t, time_points_[t]);
+                    rt_trajectory.push_back(Rt);
+                    
+                    // Calculate seroprevalence
+                    if (t > 0) {
+                        double dt = time_points_[t] - time_points_[t-1];
+                        double kappa_t = run_model->getNpiStrategy()->getReductionFactor(time_points_[t]);
+                        Eigen::VectorXd infectious_load = Eigen::VectorXd::Zero(num_age_classes_);
+                        for (int j = 0; j < num_age_classes_; ++j) {
+                            if (params.N(j) > 1e-9) {
+                                infectious_load(j) = (P_t(j) + A_t(j) + params.theta * I_t(j)) / params.N(j);
+                            }
+                        }
+                        Eigen::VectorXd lambda_t = params.beta * kappa_t * params.M_baseline * infectious_load;
+                        Eigen::VectorXd new_infections = lambda_t.array() * S_t.array() * dt;
+                        cumulative_infections += new_infections;
+                    }
+                    double seroprevalence = cumulative_infections.sum() / total_population;
+                    sero_trajectory.push_back(seroprevalence);
+                }
+                
+                // Save trajectories
+                std::string rt_filepath = FileUtils::joinPaths(output_dir_base_, 
+                    "mcmc_batches/rt_runs/rt_sample_" + std::to_string(sample_idx) + ".csv");
+                saveVectorToCSV(rt_filepath, rt_trajectory);
+                
+                std::string sero_filepath = FileUtils::joinPaths(output_dir_base_, 
+                    "mcmc_batches/sero_runs/sero_sample_" + std::to_string(sample_idx) + ".csv");
+                saveVectorToCSV(sero_filepath, sero_trajectory);
+            }
+            
+            // Also compute essential metrics
             EssentialMetrics metrics = analyzeSingleRunLightweight(params, run_id);
             batch_metrics.push_back(metrics);
             processed_samples++;
@@ -314,6 +388,95 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
     // ENE-COVID validation using aggregated results
     ensureOutputSubdirectoryExists("seroprevalence");
     performENECOVIDValidationFromBatches("mcmc_batches", batch_count);
+}
+
+void PostCalibrationAnalyser::aggregateTrajectoryResults(
+    const std::string& source_subdir, 
+    const std::string& output_filename) {
+    
+    Logger::getInstance().info("PostCalibrationAnalyser", "Aggregating trajectories from " + source_subdir);
+    
+    std::string source_path = FileUtils::joinPaths(
+        FileUtils::joinPaths(output_dir_base_, "mcmc_batches"), source_subdir);
+    
+    if (!fs::exists(source_path) || !fs::is_directory(source_path)) {
+        Logger::getInstance().warning("PostCalibrationAnalyser", 
+            "Source directory for trajectories not found: " + source_path);
+        return;
+    }
+
+    // Read all trajectories
+    std::vector<std::vector<double>> all_trajectories;
+    for (const auto& entry : fs::directory_iterator(source_path)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".csv") {
+            std::vector<double> trajectory;
+            std::ifstream file(entry.path());
+            std::string line;
+            while(std::getline(file, line)) {
+                try {
+                    trajectory.push_back(std::stod(line));
+                } catch(const std::exception& e) {
+                    // Skip lines that can't be parsed
+                }
+            }
+            if (!trajectory.empty()) {
+                all_trajectories.push_back(trajectory);
+            }
+        }
+    }
+
+    if (all_trajectories.empty()) {
+        Logger::getInstance().warning("PostCalibrationAnalyser", 
+            "No trajectory files found to aggregate in " + source_subdir);
+        return;
+    }
+
+    // Aggregate the results
+    size_t num_timesteps = all_trajectories[0].size();
+    std::string output_path = FileUtils::joinPaths(output_dir_base_, output_filename);
+    std::ofstream outfile(output_path);
+    outfile << "time,median,q025,q975,q05,q95\n";
+    outfile << std::fixed << std::setprecision(6);
+
+    for (size_t t = 0; t < num_timesteps && t < time_points_.size(); ++t) {
+        std::vector<double> values_at_t;
+        values_at_t.reserve(all_trajectories.size());
+        
+        for (const auto& traj : all_trajectories) {
+            if (t < traj.size()) {
+                values_at_t.push_back(traj[t]);
+            }
+        }
+
+        if (!values_at_t.empty()) {
+            std::sort(values_at_t.begin(), values_at_t.end());
+            size_t n = values_at_t.size();
+            double median = values_at_t[n / 2];
+            double q025 = values_at_t[static_cast<size_t>(0.025 * n)];
+            double q975 = values_at_t[static_cast<size_t>(0.975 * n)];
+            double q05 = values_at_t[static_cast<size_t>(0.05 * n)];
+            double q95 = values_at_t[static_cast<size_t>(0.95 * n)];
+            
+            outfile << time_points_[t] << "," << median << "," << q025 << "," 
+                   << q975 << "," << q05 << "," << q95 << "\n";
+        }
+    }
+    
+    outfile.close();
+    Logger::getInstance().info("PostCalibrationAnalyser", "Saved aggregated trajectory to " + output_filename);
+}
+
+// Helper method implementations
+void PostCalibrationAnalyser::saveVectorToCSV(
+    const std::string& filepath, 
+    const std::vector<double>& data) {
+    
+    std::ofstream file(filepath);
+    file << std::setprecision(10);
+    for (const auto& value : data) {
+        file << value << "\n";
+    }
+    file.close();
 }
 
 PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChecksOptimized(

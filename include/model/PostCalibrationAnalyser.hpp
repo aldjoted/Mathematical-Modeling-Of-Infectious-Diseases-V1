@@ -152,6 +152,14 @@ public:
         int thinning = 1
     );
 
+    /**
+     * @brief Aggregate trajectory results from individual run files
+     */
+    void aggregateTrajectoryResults(
+        const std::string& source_subdir,
+        const std::string& output_filename
+    );
+
 private:
     std::shared_ptr<AgeSEPAIHRDModel> model_template_;
     std::shared_ptr<IOdeSolverStrategy> solver_strategy_;
@@ -191,6 +199,11 @@ private:
     void saveEssentialMetricsCSV(
         const std::string& filepath,
         const EssentialMetrics& metrics
+    );
+    
+    void saveVectorToCSV(
+        const std::string& filepath,
+        const std::vector<double>& data
     );
     
     void saveMetricsSummaryFromBatches(
@@ -236,6 +249,12 @@ private:
     void performENECOVIDValidationFromBatches(
         const std::string& batch_subdir,
         int num_batches
+    );
+    
+    void calculateAndSaveTrajectories(
+        const SimulationResult& sim_result,
+        const SEPAIHRDParameters& params,
+        int sample_idx
     );
 };
 

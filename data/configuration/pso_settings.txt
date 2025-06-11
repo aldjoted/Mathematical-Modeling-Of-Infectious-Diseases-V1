@@ -3,7 +3,7 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 100
-iterations 500
+iterations 50
 
 # swarm_size: Number of particles in the swarm.
 # Default: 30
@@ -38,7 +38,7 @@ c2_final 2.0
 
 # report_interval: Frequency (in iterations) for logging general progress reports.
 # Default: 10
-report_interval 50
+report_interval 10
 
 # use_lbest_topology: If true (1.0), particles are attracted to their local best neighbor (ring topology).
 # If false (0.0), particles are attracted to the global best (star topology).
