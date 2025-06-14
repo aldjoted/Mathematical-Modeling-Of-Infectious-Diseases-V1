@@ -14,6 +14,16 @@
 #include "sir_age_structured/SimulationResult.hpp"
 #include "utils/GetCalibrationData.hpp"
 
+#include <boost/accumulators/accumulators.hpp>
+#include <boost/accumulators/statistics/stats.hpp>
+#include <boost/accumulators/statistics/median.hpp> // For tag::median if preferred over quantile(0.5)
+#include <boost/accumulators/statistics/extended_p_square_quantile.hpp>
+#include <boost/accumulators/statistics/max.hpp>
+#include <boost/accumulators/statistics/count.hpp>
+#include <boost/accumulators/statistics/mean.hpp>
+#include <boost/accumulators/statistics/variance.hpp>
+
+
 namespace epidemic {
 
 /**
@@ -54,10 +64,10 @@ struct PosteriorPredictiveData {
     
     struct IncidenceData {
         Eigen::MatrixXd median;
-        Eigen::MatrixXd lower_90;
-        Eigen::MatrixXd upper_90;
-        Eigen::MatrixXd lower_95;
-        Eigen::MatrixXd upper_95;
+        Eigen::MatrixXd lower_90; // Corresponds to 0.05 quantile
+        Eigen::MatrixXd upper_90; // Corresponds to 0.95 quantile
+        Eigen::MatrixXd lower_95; // Corresponds to 0.025 quantile
+        Eigen::MatrixXd upper_95; // Corresponds to 0.975 quantile
         Eigen::MatrixXd observed;
     };
     
@@ -168,30 +178,6 @@ private:
     std::string output_dir_base_;
     CalibrationData observed_data_;
     int num_age_classes_;
-
-    // Helper class for accumulating quantiles without storing all values
-    class QuantileAccumulator {
-    private:
-        std::vector<double> values_;
-        bool is_sorted_ = false;
-        
-    public:
-        void reserve(size_t n) { values_.reserve(n); }
-        void add(double v) { values_.push_back(v); is_sorted_ = false; }
-        void clear() { values_.clear(); values_.shrink_to_fit(); is_sorted_ = false; }
-        
-        double quantile(double q) {
-            if (values_.empty()) return NAN;
-            if (!is_sorted_) {
-                std::sort(values_.begin(), values_.end());
-                is_sorted_ = true;
-            }
-            size_t idx = static_cast<size_t>(q * (values_.size() - 1));
-            return values_[idx];
-        }
-        
-        size_t size() const { return values_.size(); }
-    };
 
     // Memory-efficient helpers
     void ensureOutputSubdirectoryExists(const std::string& subdir_name);

@@ -154,7 +154,7 @@ Eigen::VectorXd CalibrationData::getInitialSEPAIHRDState(
     Eigen::VectorXd D0_i = cumulative_deaths.row(0).cwiseMax(0.0);
     Eigen::VectorXd ICU0_i = cumulative_icu.row(0).cwiseMax(0.0);
     Eigen::VectorXd H0_i = cumulative_hospitalizations.row(0).cwiseMax(0.0);
-    Eigen::VectorXd I0_i = new_confirmed_cases.row(0).cwiseMax(0.0);
+    Eigen::VectorXd I0_i = (cumulative_confirmed_cases.row(0).transpose() + H0_i + ICU0_i).cwiseMax(0.0);
 
     Eigen::VectorXd R0_i = Eigen::VectorXd::Zero(num_age_classes);
     Eigen::VectorXd E0_i(num_age_classes);

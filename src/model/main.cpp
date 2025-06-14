@@ -237,7 +237,8 @@ int main(int argc, char* argv[]) {
                  << "I: " << initial_state[i + 4 * num_age_classes] << ", "
                  << "H: " << initial_state[i + 5 * num_age_classes] << ", "
                  << "ICU: " << initial_state[i + 6 * num_age_classes] << ", "
-                 << "R: " << initial_state[i + 7 * num_age_classes] 
+                 << "R: " << initial_state[i + 7 * num_age_classes] << ", "
+                 << "D: " << initial_state[i + 8 * num_age_classes]
                  << endl;
         }
 

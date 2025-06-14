@@ -9,10 +9,31 @@
 #include <iomanip>
 #include <numeric>
 #include <algorithm>
-#include <cmath>
+#include <cmath> // For std::isnan, NAN
 #include <random>
 #include <sstream>
 #include <filesystem>
+#include <vector> // Required for std::vector<double> probs
+
+// Boost Accumulators related types
+namespace ba = boost::accumulators;
+using PPDQuantileAccumulatorType = ba::accumulator_set<double,
+    ba::stats<
+        ba::tag::extended_p_square_quantile(ba::quadratic),
+        ba::tag::max,
+        ba::tag::count
+    >
+>;
+
+using SummaryStatsAccumulatorType = ba::accumulator_set<double,
+    ba::stats<
+        ba::tag::extended_p_square_quantile(ba::quadratic),
+        ba::tag::mean,
+        ba::tag::variance(ba::lazy), // Use lazy variance for sqrt(variance) as std_dev
+        ba::tag::count
+    >
+>;
+
 
 namespace fs = std::filesystem;
 
@@ -438,24 +459,36 @@ void PostCalibrationAnalyser::aggregateTrajectoryResults(
     outfile << "time,median,q025,q975,q05,q95\n";
     outfile << std::fixed << std::setprecision(6);
 
+    std::vector<double> trajectory_probs = {0.025, 0.05, 0.5, 0.95, 0.975};
+
     for (size_t t = 0; t < num_timesteps && t < time_points_.size(); ++t) {
-        std::vector<double> values_at_t;
-        values_at_t.reserve(all_trajectories.size());
+        // std::vector<double> values_at_t; // Old code
+        // values_at_t.reserve(all_trajectories.size()); // Old code
+        
+        SummaryStatsAccumulatorType acc_at_t(ba::extended_p_square_probabilities = trajectory_probs);
         
         for (const auto& traj : all_trajectories) {
             if (t < traj.size()) {
-                values_at_t.push_back(traj[t]);
+                // values_at_t.push_back(traj[t]); // Old code
+                acc_at_t(traj[t]);
             }
         }
 
-        if (!values_at_t.empty()) {
-            std::sort(values_at_t.begin(), values_at_t.end());
-            size_t n = values_at_t.size();
-            double median = values_at_t[n / 2];
-            double q025 = values_at_t[static_cast<size_t>(0.025 * n)];
-            double q975 = values_at_t[static_cast<size_t>(0.975 * n)];
-            double q05 = values_at_t[static_cast<size_t>(0.05 * n)];
-            double q95 = values_at_t[static_cast<size_t>(0.95 * n)];
+        // if (!values_at_t.empty()) { // Old code
+        if (ba::count(acc_at_t) > 0) {
+            // std::sort(values_at_t.begin(), values_at_t.end()); // Old code
+            // size_t n = values_at_t.size(); // Old code
+            // double median = values_at_t[n / 2]; // Old code
+            // double q025 = values_at_t[static_cast<size_t>(0.025 * n)]; // Old code
+            // double q975 = values_at_t[static_cast<size_t>(0.975 * n)]; // Old code
+            // double q05 = values_at_t[static_cast<size_t>(0.05 * n)]; // Old code
+            // double q95 = values_at_t[static_cast<size_t>(0.95 * n)]; // Old code
+            
+            double median = ba::quantile(acc_at_t, ba::quantile_probability = 0.5);
+            double q025 = ba::quantile(acc_at_t, ba::quantile_probability = 0.025);
+            double q975 = ba::quantile(acc_at_t, ba::quantile_probability = 0.975);
+            double q05 = ba::quantile(acc_at_t, ba::quantile_probability = 0.05);
+            double q95 = ba::quantile(acc_at_t, ba::quantile_probability = 0.95);
             
             outfile << time_points_[t] << "," << median << "," << q025 << "," 
                    << q975 << "," << q05 << "," << q95 << "\n";
@@ -504,14 +537,16 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
     
     int T = time_points_.size();
     int A = num_age_classes_;
+
+    std::vector<double> ppd_probs = {0.025, 0.05, 0.5, 0.95, 0.975};
     
     // Initialize quantile accumulators
-    std::vector<std::vector<QuantileAccumulator>> hosp_acc(T, std::vector<QuantileAccumulator>(A));
-    std::vector<std::vector<QuantileAccumulator>> icu_acc(T, std::vector<QuantileAccumulator>(A));
-    std::vector<std::vector<QuantileAccumulator>> death_acc(T, std::vector<QuantileAccumulator>(A));
-    std::vector<std::vector<QuantileAccumulator>> c_hosp_acc(T, std::vector<QuantileAccumulator>(A));
-    std::vector<std::vector<QuantileAccumulator>> c_icu_acc(T, std::vector<QuantileAccumulator>(A));
-    std::vector<std::vector<QuantileAccumulator>> c_death_acc(T, std::vector<QuantileAccumulator>(A));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> hosp_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> icu_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> death_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> c_hosp_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> c_icu_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
+    std::vector<std::vector<PPDQuantileAccumulatorType>> c_death_acc(T, std::vector<PPDQuantileAccumulatorType>(A, PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
     
     // Select samples
     std::vector<int> selected_indices;
@@ -528,18 +563,19 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
         std::iota(selected_indices.begin(), selected_indices.end(), 0);
     }
     
-    // Reserve space for accumulators
-    int expected_samples = selected_indices.size();
-    for (int t = 0; t < T; ++t) {
-        for (int a = 0; a < A; ++a) {
-            hosp_acc[t][a].reserve(expected_samples);
-            icu_acc[t][a].reserve(expected_samples);
-            death_acc[t][a].reserve(expected_samples);
-            c_hosp_acc[t][a].reserve(expected_samples);
-            c_icu_acc[t][a].reserve(expected_samples);
-            c_death_acc[t][a].reserve(expected_samples);
-        }
-    }
+    // Reserve space for accumulators - Not needed for Boost accumulators in this way
+    // int expected_samples = selected_indices.size(); // Keep for logging
+    // for (int t = 0; t < T; ++t) {
+    //     for (int a = 0; a < A; ++a) {
+    //         hosp_acc[t][a].reserve(expected_samples);
+    //         icu_acc[t][a].reserve(expected_samples);
+    //         death_acc[t][a].reserve(expected_samples);
+    //         c_hosp_acc[t][a].reserve(expected_samples);
+    //         c_icu_acc[t][a].reserve(expected_samples);
+    //         c_death_acc[t][a].reserve(expected_samples);
+    //     }
+    // }
+    int expected_samples = selected_indices.size(); // Keep for logging
     
     // Process samples one at a time
     int processed = 0;
@@ -576,18 +612,38 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
         // Accumulate values for quantile calculation
         for (int t = 0; t < T; ++t) {
             for (int a = 0; a < A; ++a) {
-                hosp_acc[t][a].add(daily_hosp(t, a));
-                icu_acc[t][a].add(daily_icu(t, a));
-                death_acc[t][a].add(daily_deaths(t, a));
+                hosp_acc[t][a](daily_hosp(t, a));
+                icu_acc[t][a](daily_icu(t, a));
+                death_acc[t][a](daily_deaths(t, a));
                 
                 // Cumulative values
-                double c_h = (t > 0) ? c_hosp_acc[t-1][a].quantile(1.0) + daily_hosp(t, a) : daily_hosp(t, a);
-                double c_i = (t > 0) ? c_icu_acc[t-1][a].quantile(1.0) + daily_icu(t, a) : daily_icu(t, a);
-                double c_d = (t > 0) ? c_death_acc[t-1][a].quantile(1.0) + daily_deaths(t, a) : daily_deaths(t, a);
+                double c_h_prev_max_val = NAN;
+                if (t > 0) {
+                    if (ba::count(c_hosp_acc[t-1][a]) > 0) {
+                        c_h_prev_max_val = ba::max(c_hosp_acc[t-1][a]);
+                    }
+                }
+                double c_h = (t > 0) ? (std::isnan(c_h_prev_max_val) ? NAN : c_h_prev_max_val + daily_hosp(t, a)) : daily_hosp(t, a);
+
+                double c_i_prev_max_val = NAN;
+                if (t > 0) {
+                    if (ba::count(c_icu_acc[t-1][a]) > 0) {
+                        c_i_prev_max_val = ba::max(c_icu_acc[t-1][a]);
+                    }
+                }
+                double c_i = (t > 0) ? (std::isnan(c_i_prev_max_val) ? NAN : c_i_prev_max_val + daily_icu(t, a)) : daily_icu(t, a);
+
+                double c_d_prev_max_val = NAN;
+                if (t > 0) {
+                    if (ba::count(c_death_acc[t-1][a]) > 0) {
+                        c_d_prev_max_val = ba::max(c_death_acc[t-1][a]);
+                    }
+                }
+                double c_d = (t > 0) ? (std::isnan(c_d_prev_max_val) ? NAN : c_d_prev_max_val + daily_deaths(t, a)) : daily_deaths(t, a);
                 
-                c_hosp_acc[t][a].add(c_h);
-                c_icu_acc[t][a].add(c_i);
-                c_death_acc[t][a].add(c_d);
+                c_hosp_acc[t][a](c_h);
+                c_icu_acc[t][a](c_i);
+                c_death_acc[t][a](c_d);
             }
         }
         
@@ -600,7 +656,7 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
     
     // Compute quantiles
     auto fillQuantiles = [&](PosteriorPredictiveData::IncidenceData& data,
-                            std::vector<std::vector<QuantileAccumulator>>& acc) {
+                            std::vector<std::vector<PPDQuantileAccumulatorType>>& acc) {
         data.median.resize(T, A);
         data.lower_90.resize(T, A);
         data.upper_90.resize(T, A);
@@ -609,12 +665,12 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
         
         for (int t = 0; t < T; ++t) {
             for (int a = 0; a < A; ++a) {
-                if (acc[t][a].size() > 0) {
-                    data.median(t, a) = acc[t][a].quantile(0.5);
-                    data.lower_90(t, a) = acc[t][a].quantile(0.05);
-                    data.upper_90(t, a) = acc[t][a].quantile(0.95);
-                    data.lower_95(t, a) = acc[t][a].quantile(0.025);
-                    data.upper_95(t, a) = acc[t][a].quantile(0.975);
+                if (ba::count(acc[t][a]) > 0) {
+                    data.median(t, a) = ba::quantile(acc[t][a], ba::quantile_probability = 0.5);
+                    data.lower_90(t, a) = ba::quantile(acc[t][a], ba::quantile_probability = 0.05);
+                    data.upper_90(t, a) = ba::quantile(acc[t][a], ba::quantile_probability = 0.95);
+                    data.lower_95(t, a) = ba::quantile(acc[t][a], ba::quantile_probability = 0.025);
+                    data.upper_95(t, a) = ba::quantile(acc[t][a], ba::quantile_probability = 0.975);
                 } else {
                     data.median(t, a) = NAN;
                     data.lower_90(t, a) = NAN;
@@ -622,8 +678,8 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
                     data.lower_95(t, a) = NAN;
                     data.upper_95(t, a) = NAN;
                 }
-                // Clear accumulator to free memory
-                acc[t][a].clear();
+                // Clear accumulator to free memory - Not needed for Boost accumulators here
+                // acc[t][a].clear(); 
             }
         }
     };
@@ -778,37 +834,48 @@ void PostCalibrationAnalyser::saveParameterPosteriorsStreaming(
     sumfile << "parameter,mean,median,std_dev,q025,q975\n";
     sumfile << std::fixed << std::setprecision(8);
     
+    std::vector<double> param_summary_probs = {0.025, 0.5, 0.975};
+
     // Process one parameter at a time to minimize memory usage
     for (size_t p_idx = 0; p_idx < param_names.size(); ++p_idx) {
-        std::vector<double> values;
-        values.reserve((param_samples.size() - burn_in) / thinning);
+        // std::vector<double> values; // Old code
+        // values.reserve((param_samples.size() - burn_in) / thinning); // Old code
+        SummaryStatsAccumulatorType param_acc(ba::extended_p_square_probabilities = param_summary_probs);
         
         for (size_t i = burn_in; i < param_samples.size(); i += thinning) {
             if (p_idx < static_cast<size_t>(param_samples[i].size())) {
-                values.push_back(param_samples[i][p_idx]);
+                // values.push_back(param_samples[i][p_idx]); // Old code
+                param_acc(param_samples[i][p_idx]);
             }
         }
         
-        if (!values.empty()) {
-            std::sort(values.begin(), values.end());
-            double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
-            double median = values[values.size() / 2];
-            double q025 = values[static_cast<size_t>(0.025 * values.size())];
-            double q975 = values[static_cast<size_t>(0.975 * values.size())];
+        // if (!values.empty()) { // Old code
+        if (ba::count(param_acc) > 0) {
+            // std::sort(values.begin(), values.end()); // Old code
+            // double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size(); // Old code
+            // double median = values[values.size() / 2]; // Old code
+            // double q025 = values[static_cast<size_t>(0.025 * values.size())]; // Old code
+            // double q975 = values[static_cast<size_t>(0.975 * values.size())]; // Old code
             
-            double sum_sq_diff = 0.0;
-            for (double val : values) {
-                sum_sq_diff += (val - mean) * (val - mean);
-            }
-            double std_dev = std::sqrt(sum_sq_diff / values.size());
+            // double sum_sq_diff = 0.0; // Old code
+            // for (double val : values) { // Old code
+            //     sum_sq_diff += (val - mean) * (val - mean); // Old code
+            // } // Old code
+            // double std_dev = std::sqrt(sum_sq_diff / values.size()); // Old code
+
+            double mean = ba::mean(param_acc);
+            double median = ba::quantile(param_acc, ba::quantile_probability = 0.5);
+            double q025 = ba::quantile(param_acc, ba::quantile_probability = 0.025);
+            double q975 = ba::quantile(param_acc, ba::quantile_probability = 0.975);
+            double std_dev = std::sqrt(ba::variance(param_acc));
             
             sumfile << param_names[p_idx] << "," << mean << "," << median << "," 
                    << std_dev << "," << q025 << "," << q975 << "\n";
         }
         
-        // Clear values to free memory
-        values.clear();
-        values.shrink_to_fit();
+        // Clear values to free memory - Not needed for Boost accumulators
+        // values.clear(); // Old code
+        // values.shrink_to_fit(); // Old code
     }
     
     sumfile.close();
@@ -931,9 +998,12 @@ void PostCalibrationAnalyser::aggregateBatchResults(
     summary_file << "metric,mean,median,std_dev,q025,q975\n";
     summary_file << std::fixed << std::setprecision(8);
     
+    std::vector<double> batch_summary_probs = {0.025, 0.5, 0.975};
+
     // Process each metric
     for (const auto& col_name : scalar_columns) {
-        std::vector<double> all_values;
+        // std::vector<double> all_values; // Old code
+        SummaryStatsAccumulatorType batch_metric_acc(ba::extended_p_square_probabilities = batch_summary_probs);
         
         // Read values from all batch files
         for (int batch = 0; batch < num_batches; ++batch) {
@@ -966,7 +1036,14 @@ void PostCalibrationAnalyser::aggregateBatchResults(
                         std::getline(data_stream, value, ',');
                     }
                     if (!value.empty()) {
-                        all_values.push_back(std::stod(value));
+                        // all_values.push_back(std::stod(value)); // Old code
+                        try {
+                            batch_metric_acc(std::stod(value));
+                        } catch (const std::invalid_argument& ia) {
+                            Logger::getInstance().warning("PostCalibrationAnalyser", "Invalid number format in batch file for metric " + col_name + ": " + value);
+                        } catch (const std::out_of_range& oor) {
+                            Logger::getInstance().warning("PostCalibrationAnalyser", "Number out of range in batch file for metric " + col_name + ": " + value);
+                        }
                     }
                 }
             }
@@ -974,18 +1051,25 @@ void PostCalibrationAnalyser::aggregateBatchResults(
         }
         
         // Compute statistics
-        if (!all_values.empty()) {
-            std::sort(all_values.begin(), all_values.end());
-            double mean = std::accumulate(all_values.begin(), all_values.end(), 0.0) / all_values.size();
-            double median = all_values[all_values.size() / 2];
-            double q025 = all_values[static_cast<size_t>(0.025 * all_values.size())];
-            double q975 = all_values[static_cast<size_t>(0.975 * all_values.size())];
+        // if (!all_values.empty()) { // Old code
+        if (ba::count(batch_metric_acc) > 0) {
+            // std::sort(all_values.begin(), all_values.end()); // Old code
+            // double mean = std::accumulate(all_values.begin(), all_values.end(), 0.0) / all_values.size(); // Old code
+            // double median = all_values[all_values.size() / 2]; // Old code
+            // double q025 = all_values[static_cast<size_t>(0.025 * all_values.size())]; // Old code
+            // double q975 = all_values[static_cast<size_t>(0.975 * all_values.size())]; // Old code
             
-            double sum_sq_diff = 0.0;
-            for (double val : all_values) {
-                sum_sq_diff += (val - mean) * (val - mean);
-            }
-            double std_dev = std::sqrt(sum_sq_diff / all_values.size());
+            // double sum_sq_diff = 0.0; // Old code
+            // for (double val : all_values) { // Old code
+            //     sum_sq_diff += (val - mean) * (val - mean); // Old code
+            // } // Old code
+            // double std_dev = std::sqrt(sum_sq_diff / all_values.size()); // Old code
+
+            double mean = ba::mean(batch_metric_acc);
+            double median = ba::quantile(batch_metric_acc, ba::quantile_probability = 0.5);
+            double q025 = ba::quantile(batch_metric_acc, ba::quantile_probability = 0.025);
+            double q975 = ba::quantile(batch_metric_acc, ba::quantile_probability = 0.975);
+            double std_dev = std::sqrt(ba::variance(batch_metric_acc));
             
             summary_file << col_name << "," << mean << "," << median << ","
                         << std_dev << "," << q025 << "," << q975 << "\n";
