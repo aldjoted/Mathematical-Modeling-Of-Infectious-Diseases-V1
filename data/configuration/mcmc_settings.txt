@@ -16,10 +16,10 @@ mcmc_enable_vectorization 1.0
 # --- Proposal & Refinement Strategy ---
 mcmc_step_size 0.005
 mcmc_enable_refinement 1.0
-mcmc_refinement_steps 4
+mcmc_refinement_steps 5
 
 # --- Adaptive Sampling Settings ---
-mcmc_adaptive_step 0.0
+mcmc_adaptive_step 1.0
 mcmc_target_acceptance 0.234
 mcmc_adaptation_rate 0.05
 

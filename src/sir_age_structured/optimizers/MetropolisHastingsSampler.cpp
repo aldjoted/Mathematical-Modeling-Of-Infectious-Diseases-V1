@@ -186,12 +186,8 @@ namespace epidemic {
         if (calculate_posterior_mean_ && !result.samples.empty()) {
             Eigen::VectorXd posterior_mean = Eigen::VectorXd::Zero(current_params.size());
             
-            // Vectorized accumulation
-            #ifdef _OPENMP
-            #pragma omp simd reduction(+:posterior_mean)
-            #endif
-            for (const auto& sample : result.samples) {
-                posterior_mean += sample;
+            for (size_t i = 0; i < result.samples.size(); ++i) {
+                posterior_mean += result.samples[i];
             }
             posterior_mean /= static_cast<double>(result.samples.size());
             

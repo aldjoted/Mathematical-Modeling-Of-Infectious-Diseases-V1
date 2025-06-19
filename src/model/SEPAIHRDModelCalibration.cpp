@@ -152,7 +152,7 @@ ModelCalibrator SEPAIHRDModelCalibration::runPSOMCMC(
 {
      std::cout << "\n=== Setting up SEPAIHRD Calibration (PSO + MCMC) ===" << std::endl;
 
-    auto phase1_algo = std::make_unique<ParticleSwarmOptimizer>();
+    auto phase1_algo = std::make_unique<ParticleSwarmOptimization>();
     auto phase2_algo = std::make_unique<MetropolisHastingsSampler>();
 
     std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> optimization_algorithms;

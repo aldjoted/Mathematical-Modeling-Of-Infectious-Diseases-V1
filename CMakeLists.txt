@@ -18,6 +18,7 @@ find_package(GSL REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 find_package(Boost REQUIRED COMPONENTS system)
 find_package(GTest REQUIRED)
+find_package(OpenMP REQUIRED)
 
 # --- Base Model Library ---
 set(BASE_MODEL_SRCS
@@ -43,6 +44,7 @@ target_link_libraries(sir_models_lib
         GSL::gslcblas
         Eigen3::Eigen
         Boost::system
+        OpenMP::OpenMP_CXX
 )
 
 # --- Age-Structured & SEPAIHRD Model Library ---
@@ -98,6 +100,7 @@ target_link_libraries(epidemic_models_lib
         GSL::gslcblas
         Eigen3::Eigen
         Boost::system
+        OpenMP::OpenMP_CXX
 )
 
 # --- Application Entry Points ---

@@ -3,11 +3,11 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 5000
-iterations 10
+iterations 5000
 
 # initial_step: Initial coefficient for the step size.
 # Default: 1.0
-initial_step 0.1
+initial_step 0.01
 
 # cooling_rate: Rate at which the step size coefficient is reduced (multiplied by this factor).
 # Should be between 0.001 and 0.999.
@@ -31,11 +31,11 @@ burnin_step_increase 0.05
 
 # post_burnin_step_coef: Base step size coefficient used after the burn-in phase for 'all parameter' steps.
 # Default: 1.0
-post_burnin_step_coef 0.05
+post_burnin_step_coef 0.01
 
 # one_param_step_coef: Base step size coefficient for 'one parameter at a time' steps.
 # Default: 1.0
-one_param_step_coef 0.05
+one_param_step_coef 0.01
 
 # min_step_coef: Minimum allowed step size coefficient to prevent steps from becoming too small.
 # Default: 0.01
@@ -43,7 +43,7 @@ min_step_coef 0.00001
 
 # report_interval: Frequency (in iterations) for logging progress updates.
 # Default: 100 
-report_interval 50
+report_interval 5
 
 # restart_interval: Iteration interval for performing a restart from the best-found solution.
 # 0 means no restarts.

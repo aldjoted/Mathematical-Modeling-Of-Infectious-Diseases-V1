@@ -41,4 +41,4 @@ kappa_4 0.05
 kappa_5 0.05
 kappa_6 0.08
 kappa_7 0.05
-kappa_8 0.06
+#kappa_8 0.06

@@ -3,11 +3,11 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 100
-iterations 50
+iterations 100
 
 # swarm_size: Number of particles in the swarm.
 # Default: 30
-swarm_size 150
+swarm_size 30
 
 # omega_start: Initial value of the inertia weight (omega). Used if use_constriction_factor is false.
 # Controls the influence of the particle's previous velocity.
@@ -38,7 +38,7 @@ c2_final 2.0
 
 # report_interval: Frequency (in iterations) for logging general progress reports.
 # Default: 10
-report_interval 10
+report_interval 5
 
 # use_lbest_topology: If true (1.0), particles are attracted to their local best neighbor (ring topology).
 # If false (0.0), particles are attracted to the global best (star topology).

@@ -195,8 +195,8 @@ int main(int argc, char* argv[]) {
         params.N = N;
         params.M_baseline = C;
         
-        if (params.kappa_end_times.size() != 8 || params.kappa_values.size() != 8) {
-            throw DataFormatException("main", "Invalid kappa parameters count - expected 8 each");
+        if (params.kappa_end_times.size() != 7 || params.kappa_values.size() != 7) {
+            throw DataFormatException("main", "Invalid kappa parameters count - expected 7 each");
         }
 
         std::vector<std::string> all_kappa_parameter_names;

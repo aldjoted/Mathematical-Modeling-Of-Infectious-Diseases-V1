@@ -1,31 +1,31 @@
 # SEPAIHRD Model Parameters - INITIAL GUESS
 
-kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 300.0 305.0
+kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 305.0
 
 # --- Disease transmission parameters ---
-beta 2.250068e-01
-theta 3.132830e-01
+beta 2.613671e-01
+theta 4.042928e-01
 
 # --- Disease progression rates (inverse durations) ---
-sigma 5.288333e-01
-gamma_p 9.856350e-01
-gamma_A 2.894039e-01
-gamma_I 3.307270e-01
-gamma_H 1.426583e-01
-gamma_ICU 1.238537e-01
+sigma 5.999982e-01
+gamma_p 9.999827e-01
+gamma_A 3.114207e-01
+gamma_I 3.999979e-01
+gamma_H 1.499999e-01
+gamma_ICU 1.249974e-01
 
 # --- NPI scaling factors (kappa_values) ---
 # kappa_1 is fixed
-kappa_values 1.000000e+00 5.768852e-01 2.604239e-01 4.497329e-01 9.202508e-01 1.002939e+00 1.535795e+00 1.999295e+00
+kappa_values 1.000000e+00 5.112686e-01 2.500000e-01 6.060849e-01 9.005816e-01 1.000005e+00 1.591450e+00
 
 # --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
 # Fraction asymptomatic (p)
-p 6.449572e-01 5.431157e-01 7.862444e-01 6.286631e-01
+p 5.763349e-01 5.169721e-01 7.940610e-01 6.570475e-01
 # Hospitalization rate (h)
-h 8.371740e-04 2.730039e-03 1.868465e-02 2.563289e-02
+h 8.000151e-04 3.172323e-03 2.433713e-02 3.360479e-02
 # ICU admission rate (icu)
-icu 7.872872e-03 2.728952e-02 3.242518e-02 1.656182e-02
+icu 6.791056e-03 2.001319e-02 3.200861e-02 1.500775e-02
 # Hospital mortality rate (d_H)
-d_H 1.223416e-03 5.317482e-03 4.916961e-02 3.926306e-01
+d_H 1.180208e-03 5.143083e-03 3.775044e-02 2.630786e-01
 # ICU mortality rate (d_ICU)
-d_ICU 7.525443e-03 1.988591e-02 3.468055e-02 8.134632e-02
+d_ICU 1.221620e-03 1.078149e-02 3.055391e-02 7.000001e-02
