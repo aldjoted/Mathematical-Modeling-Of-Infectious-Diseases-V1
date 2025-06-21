@@ -126,124 +126,113 @@ Eigen::VectorXd CalibrationData::getInitialActiveCases() const {
 }
 
 Eigen::VectorXd CalibrationData::getInitialSEPAIHRDState(
-    double sigma_rate,
-    double gamma_p_rate,
-    double gamma_a_rate,
-    double gamma_i_rate,
-    const Eigen::VectorXd& p_asymptomatic_fractions,
-    const Eigen::VectorXd& h_hospitalization_rates
+    double sigma,      
+    double gamma_p,    
+    double gamma_a,    
+    double gamma_i,    
+    const Eigen::VectorXd& p_asymptomatic, 
+    const Eigen::VectorXd& /*h_hospitalized  */
 ) const {
     if (n_data_points == 0) {
         throw std::runtime_error("Cannot get initial SEPAIHRD state: No data points loaded.");
     }
-    if (population_by_age.size() != num_age_classes) {
-        throw std::runtime_error("Cannot get initial SEPAIHRD state: Population data size mismatch with num_age_classes.");
+    if (cumulative_deaths.rows() == 0 || cumulative_icu.rows() == 0 || cumulative_hospitalizations.rows() == 0 || cumulative_confirmed_cases.rows() == 0) {
+        throw std::runtime_error("Cannot get initial SEPAIHRD state: Required cumulative data matrices are empty.");
     }
-    if (p_asymptomatic_fractions.size() != num_age_classes || h_hospitalization_rates.size() != num_age_classes) {
-        throw std::runtime_error("Cannot get initial SEPAIHRD state: p_asymptomatic_fractions or h_hospitalization_rates size mismatch with num_age_classes.");
-    }
-    if (cumulative_deaths.rows() == 0 || cumulative_icu.rows() == 0 || cumulative_hospitalizations.rows() == 0 || new_confirmed_cases.rows() == 0) {
-        throw std::runtime_error("Cannot get initial SEPAIHRD state: Required data matrices (D0, ICU0, H0, I0 proxies) are empty.");
-    }
-
+    
     int n_comps = 9; // S, E, P, A, I, H, ICU, R, D
     Eigen::VectorXd initial_state = Eigen::VectorXd::Zero(n_comps * num_age_classes);
-
     const Eigen::VectorXd& N = getPopulationByAgeGroup();
 
-    Eigen::VectorXd D0_i = cumulative_deaths.row(0).cwiseMax(0.0);
-    Eigen::VectorXd ICU0_i = cumulative_icu.row(0).cwiseMax(0.0);
-    Eigen::VectorXd H0_i = cumulative_hospitalizations.row(0).cwiseMax(0.0);
-    Eigen::VectorXd I0_i = (cumulative_confirmed_cases.row(0).transpose() + H0_i + ICU0_i).cwiseMax(0.0);
+    // === Step 1: Anchor with the most reliable cumulative data from day 0 ===
+    Eigen::VectorXd D0 = cumulative_deaths.row(0).cwiseMax(0.0);
+    Eigen::VectorXd H0 = cumulative_hospitalizations.row(0).cwiseMax(0.0);
+    Eigen::VectorXd ICU0 = cumulative_icu.row(0).cwiseMax(0.0);
 
-    Eigen::VectorXd R0_i = Eigen::VectorXd::Zero(num_age_classes);
-    Eigen::VectorXd E0_i(num_age_classes);
-    Eigen::VectorXd P0_i(num_age_classes);
-    Eigen::VectorXd A0_i(num_age_classes);
-    Eigen::VectorXd S0_i(num_age_classes);
+    // === Step 2: Use cumulative confirmed cases as a proxy for total infections ===
+    Eigen::VectorXd I0 = (cumulative_confirmed_cases.row(0).transpose() - D0).cwiseMax(0.0);
+
+    // === Step 3: Infer unobserved compartments using model dynamics (quasi-steady-state assumption) ===
+    Eigen::VectorXd E0(num_age_classes), P0(num_age_classes), A0(num_age_classes);
+    Eigen::VectorXd R0 = Eigen::VectorXd::Zero(num_age_classes);
 
     for (int i = 0; i < num_age_classes; ++i) {
-        double I0_val = I0_i(i);
-        double p_i_val = p_asymptomatic_fractions(i);
-        double h_i_val = h_hospitalization_rates(i);
+        double p_i = std::clamp(p_asymptomatic(i), 0.0, 1.0);
+        double one_minus_p_i = 1.0 - p_i;
 
-        p_i_val = std::max(0.0, std::min(1.0, p_i_val));
-        double one_minus_p_i_val = std::max(1e-9, 1.0 - p_i_val);
-
-        if (sigma_rate > 1e-9 && gamma_p_rate > 1e-9 && gamma_a_rate > 1e-9 && gamma_i_rate > 1e-9) {
-            P0_i(i) = I0_val * (gamma_i_rate + h_i_val) / (one_minus_p_i_val * gamma_p_rate);
-            E0_i(i) = P0_i(i) * gamma_p_rate / sigma_rate;
-            A0_i(i) = P0_i(i) * p_i_val * gamma_p_rate / gamma_a_rate;
-        } else {
-            std::cerr << "Warning: Initializing E0, P0, A0 with fallback due to non-positive rates for age group " << i << std::endl;
-            P0_i(i) = I0_val;
-            E0_i(i) = I0_val * 1.5;
-            A0_i(i) = I0_val * (p_i_val / one_minus_p_i_val);
-        }
-        E0_i(i) = std::max(0.0, E0_i(i));
-        P0_i(i) = std::max(0.0, P0_i(i));
-        A0_i(i) = std::max(0.0, A0_i(i));
-
-        D0_i(i) = std::min(D0_i(i), N(i));
-        ICU0_i(i) = std::min(ICU0_i(i), std::max(0.0, N(i) - D0_i(i)));
-        H0_i(i) = std::min(H0_i(i), std::max(0.0, N(i) - D0_i(i) - ICU0_i(i)));
-        I0_i(i) = std::min(I0_i(i), std::max(0.0, N(i) - D0_i(i) - ICU0_i(i) - H0_i(i)));
-
-        double sum_non_S = E0_i(i) + P0_i(i) + A0_i(i) + I0_i(i) + H0_i(i) + ICU0_i(i) + R0_i(i) + D0_i(i);
-
-        if (sum_non_S > N(i)) {
-            double sum_data_derived_and_R = I0_i(i) + H0_i(i) + ICU0_i(i) + R0_i(i) + D0_i(i);
-            double sum_calculated_hidden = E0_i(i) + P0_i(i) + A0_i(i);
-
-            if (sum_data_derived_and_R >= N(i)) {
-                E0_i(i) = 0.0; P0_i(i) = 0.0; A0_i(i) = 0.0;
-                S0_i(i) = 0.0;
-            } else {
-                double available_for_hidden = N(i) - sum_data_derived_and_R;
-                if (sum_calculated_hidden > available_for_hidden) {
-                    if (sum_calculated_hidden > 1e-9) {
-                        double scale_factor = available_for_hidden / sum_calculated_hidden;
-                        E0_i(i) *= scale_factor;
-                        P0_i(i) *= scale_factor;
-                        A0_i(i) *= scale_factor;
-                    } else {
-                        E0_i(i) = 0.0; P0_i(i) = 0.0; A0_i(i) = 0.0;
-                    }
-                    S0_i(i) = 0.0;
-                } else { 
-                    S0_i(i) = available_for_hidden - sum_calculated_hidden;
-                }
-            }
-        } else {
-            S0_i(i) = N(i) - sum_non_S;
-        }
-        S0_i(i) = std::max(0.0, S0_i(i));
+        if (gamma_p > 1e-9 && one_minus_p_i > 1e-9) {
+            P0(i) = I0(i) * gamma_i / (one_minus_p_i * gamma_p);
+        } else { P0(i) = I0(i); }
+        if (gamma_a > 1e-9) {
+            A0(i) = P0(i) * p_i * gamma_p / gamma_a;
+        } else { A0(i) = P0(i) * p_i; }
+        if (sigma > 1e-9) {
+            E0(i) = P0(i) * gamma_p / sigma;
+        } else { E0(i) = P0(i); }
     }
+    
+    E0 = E0.cwiseMax(0.0);
+    P0 = P0.cwiseMax(0.0);
+    A0 = A0.cwiseMax(0.0);
 
-    initial_state.segment(0 * num_age_classes, num_age_classes) = S0_i;
-    initial_state.segment(1 * num_age_classes, num_age_classes) = E0_i;
-    initial_state.segment(2 * num_age_classes, num_age_classes) = P0_i;
-    initial_state.segment(3 * num_age_classes, num_age_classes) = A0_i;
-    initial_state.segment(4 * num_age_classes, num_age_classes) = I0_i;
-    initial_state.segment(5 * num_age_classes, num_age_classes) = H0_i;
-    initial_state.segment(6 * num_age_classes, num_age_classes) = ICU0_i;
-    initial_state.segment(7 * num_age_classes, num_age_classes) = R0_i;
-    initial_state.segment(8 * num_age_classes, num_age_classes) = D0_i;
+    // === Step 4: Assemble the state vector and enforce constraints ===
+    for (int i = 0; i < num_age_classes; ++i) {
+        D0(i) = std::min(D0(i), N(i));
+        ICU0(i) = std::min(ICU0(i), std::max(0.0, N(i) - D0(i)));
+        H0(i) = std::min(H0(i), std::max(0.0, N(i) - D0(i) - ICU0(i)));
+        I0(i) = std::min(I0(i), std::max(0.0, N(i) - D0(i) - ICU0(i) - H0(i)));
+        R0(i) = std::min(R0(i), std::max(0.0, N(i) - D0(i) - ICU0(i) - H0(i) - I0(i)));
+    }
+    
+    initial_state.segment(4 * num_age_classes, num_age_classes) = I0;
+    initial_state.segment(5 * num_age_classes, num_age_classes) = H0;
+    initial_state.segment(6 * num_age_classes, num_age_classes) = ICU0;
+    initial_state.segment(7 * num_age_classes, num_age_classes) = R0;
+    initial_state.segment(8 * num_age_classes, num_age_classes) = D0;
 
     for (int i = 0; i < num_age_classes; ++i) {
-        double total_for_age_group = 0;
-        for (int j = 0; j < n_comps; ++j) {
-            total_for_age_group += initial_state(j * num_age_classes + i);
+        double sum_of_set_compartments = I0(i) + H0(i) + ICU0(i) + R0(i) + D0(i);
+        double sum_of_inferred_compartments = E0(i) + P0(i) + A0(i);
+        double available_for_inferred_and_S = N(i) - sum_of_set_compartments;
+        
+        if (available_for_inferred_and_S < 0) { available_for_inferred_and_S = 0; }
+
+        if (sum_of_inferred_compartments > available_for_inferred_and_S) {
+            double scale_factor = (sum_of_inferred_compartments > 1e-9) ? 
+                                  available_for_inferred_and_S / sum_of_inferred_compartments : 0.0;
+            E0(i) *= scale_factor;
+            P0(i) *= scale_factor;
+            A0(i) *= scale_factor;
         }
-        if (std::abs(total_for_age_group - N(i)) > std::max(1e-9, 1e-6 * N(i))) {
+    }
+    
+    initial_state.segment(1 * num_age_classes, num_age_classes) = E0;
+    initial_state.segment(2 * num_age_classes, num_age_classes) = P0;
+    initial_state.segment(3 * num_age_classes, num_age_classes) = A0;
+
+    // === Step 5: Set Susceptible (S) as the remainder ===
+    for (int i = 0; i < num_age_classes; ++i) {
+        double sum_non_S = 0;
+        for (int j = 1; j < n_comps; ++j) {
+            sum_non_S += initial_state(j * num_age_classes + i);
+        }
+        initial_state(i) = std::max(0.0, N(i) - sum_non_S);
+    }
+    
+    // Final sanity check
+    for (int i = 0; i < num_age_classes; ++i) {
+        double total_for_age = initial_state.col(0).segment(i, 1).sum();
+        for (int j=1; j<n_comps; ++j) {
+            total_for_age += initial_state(j * num_age_classes + i);
+        }
+        if (std::abs(total_for_age - N(i)) > 1e-6 * N(i)) {
              std::cerr << "Warning: Initial state sum for age group " << i << " ("
-                       << std::fixed << std::setprecision(2) << total_for_age_group
+                       << std::fixed << std::setprecision(2) << total_for_age
                        << ") does not precisely match population N(" << i << ") = "
-                       << std::fixed << std::setprecision(2) << N(i)
-                       << ". Discrepancy: " << std::scientific << (total_for_age_group - N(i))
-                       << std::endl;
+                       << std::fixed << std::setprecision(2) << N(i) << std::endl;
         }
     }
+
     return initial_state;
 }
 

@@ -29,3 +29,9 @@ icu 6.791056e-03 2.001319e-02 3.200861e-02 1.500775e-02
 d_H 1.180208e-03 5.143083e-03 3.775044e-02 2.630786e-01
 # ICU mortality rate (d_ICU)
 d_ICU 1.221620e-03 1.078149e-02 3.055391e-02 7.000001e-02
+
+# Initial State Multipliers
+E0_multiplier 1.0
+P0_multiplier 1.0
+A0_multiplier 1.0
+I0_multiplier 1.0

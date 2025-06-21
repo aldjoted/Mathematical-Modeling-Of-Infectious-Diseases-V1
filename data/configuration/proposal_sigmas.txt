@@ -42,3 +42,8 @@ kappa_5 0.05
 kappa_6 0.08
 kappa_7 0.05
 #kappa_8 0.06
+
+E0_multiplier   0.5
+P0_multiplier   0.5
+A0_multiplier   0.5
+I0_multiplier   0.5

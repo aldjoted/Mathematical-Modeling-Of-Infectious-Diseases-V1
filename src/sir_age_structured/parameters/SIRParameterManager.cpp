@@ -155,6 +155,14 @@ Eigen::VectorXd SIRParameterManager::applyConstraints(const Eigen::VectorXd& par
     return constrained_params;
 }
 
+int SIRParameterManager::getIndexForParam(const std::string& name) const {
+    auto it = param_name_to_index_.find(name);
+    if (it != param_name_to_index_.end()) {
+        return static_cast<int>(it->second);
+    }
+    return -1; // Parameter not found
+}
+
 double SIRParameterManager::getSigmaForParamIndex(int index) const {
     if (index < 0 || static_cast<size_t>(index) >= param_names_.size()) {
         throw std::out_of_range("[ParamManager] Index out of bounds in getSigmaForParamIndex: " + 

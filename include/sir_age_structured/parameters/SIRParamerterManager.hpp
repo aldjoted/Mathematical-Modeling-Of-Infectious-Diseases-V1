@@ -65,6 +65,13 @@ namespace epidemic {
         size_t getParameterCount() const override;
 
         /**
+         * @brief Gets the index for a given parameter name.
+         * @param name The name of the parameter.
+         * @return The index of the parameter, or -1 if not found.
+         */
+        int getIndexForParam(const std::string& name) const override;
+
+        /**
          * @brief Gets proposal standard deviation for a parameter by index.
          * @param index Index of the parameter
          * @return Standard deviation for proposal distribution

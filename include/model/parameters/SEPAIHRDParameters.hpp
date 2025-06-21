@@ -71,6 +71,18 @@ struct SEPAIHRDParameters {
     /** @brief Scaling factors corresponding to each kappa period */
     std::vector<double> kappa_values;
 
+    /** @brief Multiplier for the initial number of exposed individuals (E0) */
+    double E0_multiplier = 1.0;
+
+    /** @brief Multiplier for the initial number of presymptomatic individuals (P0) */
+    double P0_multiplier = 1.0;
+
+    /** @brief Multiplier for the initial number of asymptomatic individuals (A0) */
+    double A0_multiplier = 1.0;
+
+    /** @brief Multiplier for the initial number of symptomatic individuals (I0) */
+    double I0_multiplier = 1.0;
+
     /**
      * @brief Validates that all parameter dimensions are consistent
      * @details Checks that all vector parameters have the same length as the population vector
@@ -79,14 +91,22 @@ struct SEPAIHRDParameters {
      */
     bool validate() const {
         int n = N.size();
-        if(n <=0) return false;
+        if (n <= 0) return false;
+
         bool vector_ok = (p.size() == n) &&
                          (h.size() == n) &&
                          (icu.size() == n) &&
                          (d_H.size() == n) &&
                          (d_ICU.size() == n);
+
         bool matrix_ok = (M_baseline.rows() == n && M_baseline.cols() == n);
-        return vector_ok && matrix_ok;
+
+        bool multipliers_ok = (E0_multiplier >= 0.0) &&
+                              (P0_multiplier >= 0.0) &&
+                              (A0_multiplier >= 0.0) &&
+                              (I0_multiplier >= 0.0);
+
+        return vector_ok && matrix_ok && multipliers_ok;
     }
 };
 

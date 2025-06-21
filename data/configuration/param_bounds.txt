@@ -68,3 +68,8 @@ kappa_6 1.0   1.5
 kappa_7 0.7  1.8
 # End of Year   
 #kappa_8 0.7   2.0   
+
+E0_multiplier   0.1   20.0
+P0_multiplier   0.1   20.0
+A0_multiplier   0.1   20.0
+I0_multiplier   0.1   20.0

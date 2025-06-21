@@ -59,6 +59,13 @@ public:
     virtual Eigen::VectorXd applyConstraints(const Eigen::VectorXd& parameters) const = 0;
 
     /**
+     * @brief Get the index for a specific parameter name.
+     * @param name The name of the parameter.
+     * @return int The index of the parameter, or -1 if not found.
+     */
+    virtual int getIndexForParam(const std::string& name) const = 0;
+
+    /**
      * @brief Get the lower bound for a specific parameter index.
      * @param idx The index of the parameter.
      * @return double The lower bound.

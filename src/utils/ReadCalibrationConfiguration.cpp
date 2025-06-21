@@ -202,6 +202,10 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
             else if (param_name == "gamma_H") params.gamma_H = value;
             else if (param_name == "gamma_ICU") params.gamma_ICU = value;
             else if (param_name == "contact_matrix_scaling_factor") params.contact_matrix_scaling_factor = value;
+            else if (param_name == "E0_multiplier") params.E0_multiplier = value;
+            else if (param_name == "P0_multiplier") params.P0_multiplier = value;
+            else if (param_name == "A0_multiplier") params.A0_multiplier = value;
+            else if (param_name == "I0_multiplier") params.I0_multiplier = value;
             else {
                 epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Unrecognized parameter name '" + param_name +
                                                        "' on line " + std::to_string(line_number) + ". Ignoring.");

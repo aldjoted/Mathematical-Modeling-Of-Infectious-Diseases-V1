@@ -105,6 +105,42 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
         cached_sim_data_.invalidate();
         return std::numeric_limits<double>::lowest();
     }
+
+    // --- Apply the initial state multipliers ---
+    Eigen::VectorXd initial_state_for_run = this->initial_state_;
+    int n_ages = model_->getNumAgeClasses();
+
+    // Get multipliers from the parameter vector
+    auto get_multiplier = [&](const std::string& name) -> double {
+        int idx = parameterManager_.getIndexForParam(name);
+        return (idx != -1) ? parameters(idx) : 1.0;
+    };
+
+    double e0_mult = get_multiplier("E0_multiplier");
+    double p0_mult = get_multiplier("P0_multiplier");
+    double a0_mult = get_multiplier("A0_multiplier");
+    double i0_mult = get_multiplier("I0_multiplier");
+
+    // Crucially, recalculate S to maintain the population constraint
+    const Eigen::VectorXd& N = model_->getPopulationSizes();
+    for (int i = 0; i < n_ages; ++i) {
+        double sum_non_S = 0.0;
+        for (int j = 1; j < 9; ++j) { // Sum E through D
+            sum_non_S += initial_state_for_run(j * n_ages + i);
+        }
+
+        if (sum_non_S > N(i) || sum_non_S < 0) {
+            Logger::getInstance().warning(F_NAME, "Sum of initial compartments (" + std::to_string(sum_non_S) + ") is invalid for population N(" + std::to_string(i) + ") = " + std::to_string(N(i)));
+            return std::numeric_limits<double>::lowest();
+        }
+        initial_state_for_run(i) = N(i) - sum_non_S;
+    }
+
+    // Apply multipliers to the "seed" compartments (E, P, A, I)
+    initial_state_for_run.segment(1 * n_ages, n_ages) *= e0_mult;
+    initial_state_for_run.segment(2 * n_ages, n_ages) *= p0_mult;
+    initial_state_for_run.segment(3 * n_ages, n_ages) *= a0_mult;
+    initial_state_for_run.segment(4 * n_ages, n_ages) *= i0_mult;
     
     if (!cached_sim_data_.isValid(parameters)) {
         //Logger::getInstance().debug(F_NAME, "Internal simulation data cache miss or invalid. Running simulation for parameters: " + formatParameters(parameters));

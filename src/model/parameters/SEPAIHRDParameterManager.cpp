@@ -108,6 +108,10 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name == "gamma_I") current_params_vec[i] = model_params_struct.gamma_I;
         else if (name == "gamma_H") current_params_vec[i] = model_params_struct.gamma_H;
         else if (name == "gamma_ICU") current_params_vec[i] = model_params_struct.gamma_ICU;
+        else if (name == "E0_multiplier") current_params_vec[i] = model_params_struct.E0_multiplier;
+        else if (name == "P0_multiplier") current_params_vec[i] = model_params_struct.P0_multiplier;
+        else if (name == "A0_multiplier") current_params_vec[i] = model_params_struct.A0_multiplier;
+        else if (name == "I0_multiplier") current_params_vec[i] = model_params_struct.I0_multiplier;
         // Age-specific parameters
         else if (name.rfind("p_", 0) == 0) current_params_vec[i] = model_params_struct.p(std::stoul(name.substr(2)));
         else if (name.rfind("h_", 0) == 0) current_params_vec[i] = model_params_struct.h(std::stoul(name.substr(2)));
@@ -174,6 +178,12 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.d_H(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); current_model_params_struct.d_ICU(idx) = value; model_params_struct_needs_update = true; }
+        else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
+        else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.d_H(idx) = value; model_params_struct_needs_update = true; }
+        else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); current_model_params_struct.d_ICU(idx) = value; model_params_struct_needs_update = true; }
+        else if (name == "E0_multiplier" || name == "P0_multiplier" || name == "A0_multiplier" || name == "I0_multiplier") {
+            // These parameters are used by the objective function, not the model directly. No action needed here.
+        }        
         else if (name.rfind("kappa_", 0) == 0) {
             if (!piecewise_npi_strat) {
                 throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Attempting to update kappa parameter '" + name + "' but NPI strategy is null or not PiecewiseConstant.");
