@@ -13,13 +13,12 @@
 namespace epidemic {
 
     /**
-     * @brief Age-structured SEPAIHRD epidemic model
-     * 
-     * Implements a COVID-19 like model with age structure for:
+     * @brief Age-structured SEPAIHRD epidemic model with heterogeneous susceptibility and infectiousness.
+     * * Implements a COVID-19 like model with age structure for:
      * Susceptible (S), Exposed (E), Presymptomatic (P), Asymptomatic (A),
      * Symptomatic (I), Hospitalized (H), intensive care unit (ICU), Recovered (R), and Deceased (D).
-     * Non-pharmaceutical interventions are modeled via an injected INpiStrategy
-     * that provides time-varying reduction factors applied to the baseline contact matrix.
+     * Transmission is governed by a global rate beta, an age-specific susceptibility vector a,
+     * and an age-specific infectiousness vector h_infec.
      */
     class AgeSEPAIHRDModel : public EpidemicModel {
         private:
@@ -34,6 +33,12 @@ namespace epidemic {
         
         /** @brief Current effective transmission probability per contact. */
         double beta;
+
+        /** @brief Age-specific relative susceptibility vector */
+        Eigen::VectorXd a; 
+
+        /** @brief Age-specific relative infectiousness vector */
+        Eigen::VectorXd h_infec;
         
         /** @brief Current relative transmissibility of symptomatic individuals. */
         double theta;
@@ -150,6 +155,18 @@ namespace epidemic {
          * @return Transmission rate
          */
         double getTransmissionRate() const;
+
+        /**
+         * @brief Returns the current age-specific susceptibility vector (a)
+         * @return Age-specific susceptibility vector
+         */
+        const Eigen::VectorXd& getSusceptibility() const;
+
+        /**
+         * @brief Returns the current age-specific infectiousness vector (h_infec)
+         * @return Age-specific infectiousness vector
+         */
+        const Eigen::VectorXd& getInfectiousness() const;
         
         /**
          * @brief Returns the current reduced transmissibility of symptomatic individuals (theta)
@@ -196,6 +213,21 @@ namespace epidemic {
          * @throws InvalidParameterException if new_theta is negative.
          */
         void setReducedTransmissibility(double new_theta);
+        /**
+         * @brief Sets a new age-specific susceptibility vector (a). Thread-safe.
+         * Intended for controlled updates (e.g., during calibration). Bypasses intervention logic.
+         * @param new_a New age-specific susceptibility vector
+         * @throws InvalidParameterException if new_a has incorrect dimensions.
+         */
+        void setSusceptibility(const Eigen::VectorXd& new_a);
+
+        /**
+         * @brief Sets a new age-specific infectiousness vector (h_infec). Thread-safe.
+         * Intended for controlled updates (e.g., during calibration). Bypasses intervention logic.
+         * @param new_h_infec New age-specific infectiousness vector
+         * @throws InvalidParameterException if new_h_infec has incorrect dimensions.
+         */
+        void setInfectiousness(const Eigen::VectorXd& new_h_infec);
     
         /**
          * @brief Get a shared pointer to the NPI strategy object.

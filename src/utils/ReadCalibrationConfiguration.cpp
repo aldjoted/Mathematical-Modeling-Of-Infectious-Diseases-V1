@@ -15,11 +15,9 @@
 
 void saveCalibrationResults(const std::string &filename,
                           const epidemic::SEPAIHRDParameters &parameters,
-                          const std::map<std::string, double> &calibrated_param_values_map,
                           const std::vector<std::string>& actual_calibrated_param_names,
                           double obj_value,
                           const std::string &timestamp_str) {
-    (void)calibrated_param_values_map;
 
     std::ofstream file(filename);
     if (!file.is_open()) {
@@ -81,6 +79,12 @@ void saveCalibrationResults(const std::string &filename,
     writeAgeVectorParam("d_H", parameters.d_H);
     writeAgeVectorParam("d_ICU", parameters.d_ICU);
 
+    file << std::endl << "# Initial State Multipliers" << std::endl;
+    writeScalarParam("E0_multiplier", parameters.E0_multiplier);
+    writeScalarParam("P0_multiplier", parameters.P0_multiplier);
+    writeScalarParam("A0_multiplier", parameters.A0_multiplier);
+    writeScalarParam("I0_multiplier", parameters.I0_multiplier);
+
     file << std::endl << "# NPI strategy parameters" << std::endl;
 
     file << "kappa_end_times";
@@ -113,6 +117,8 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
     epidemic::SEPAIHRDParameters params;
 
     params.p = Eigen::VectorXd(num_age_classes);
+    params.a = Eigen::VectorXd(num_age_classes);
+    params.h_infec = Eigen::VectorXd(num_age_classes);
     params.h = Eigen::VectorXd(num_age_classes);
     params.icu = Eigen::VectorXd(num_age_classes);
     params.d_H = Eigen::VectorXd(num_age_classes);
@@ -123,7 +129,7 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
 
     std::string line;
     int line_number = 0;
-    std::vector<std::string> age_vector_params = {"p", "h", "icu", "d_H", "d_ICU"};
+    std::vector<std::string> age_vector_params = {"p", "a", "h_infec", "h", "icu", "d_H", "d_ICU"};
 
     while (std::getline(file, line)) {
         line_number++;
@@ -150,6 +156,8 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
         if (is_age_vector) {
             Eigen::VectorXd* vec_ptr = nullptr;
             if (param_name == "p") vec_ptr = &params.p;
+            else if (param_name == "a") vec_ptr = &params.a;
+            else if (param_name == "h_infec") vec_ptr = &params.h_infec;
             else if (param_name == "h") vec_ptr = &params.h;
             else if (param_name == "icu") vec_ptr = &params.icu;
             else if (param_name == "d_H") vec_ptr = &params.d_H;

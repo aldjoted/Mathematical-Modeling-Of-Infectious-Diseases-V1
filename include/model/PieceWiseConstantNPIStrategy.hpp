@@ -157,6 +157,13 @@ public:
     void setCalibratableValues(const std::vector<double>& calibratable_values);
 
     /**
+     * @brief Gets all calibratable NPI parameter values.
+     * @return A vector containing the baseline kappa (if not fixed) followed by the
+     *         kappa values for subsequent NPI periods.
+     */
+    std::vector<double> getCalibratableValues() const;
+
+    /**
      * @brief Checks if the baseline NPI parameter is fixed.
      * @return True if the baseline kappa is fixed, false if it is calibratable.
      */

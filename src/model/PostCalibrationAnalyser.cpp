@@ -609,41 +609,30 @@ PosteriorPredictiveData PostCalibrationAnalyser::generatePosteriorPredictiveChec
             }
         }
         
+        // Correctly calculate cumulative values for this single sample run
+        Eigen::MatrixXd cumulative_hosp(T, A);
+        Eigen::MatrixXd cumulative_icu(T, A);
+        Eigen::MatrixXd cumulative_deaths_from_flows(T, A);
+        if (T > 0) {
+            cumulative_hosp.row(0) = daily_hosp.row(0);
+            cumulative_icu.row(0) = daily_icu.row(0);
+            cumulative_deaths_from_flows.row(0) = daily_deaths.row(0);
+            for (int t = 1; t < T; ++t) {
+                cumulative_hosp.row(t) = cumulative_hosp.row(t - 1) + daily_hosp.row(t);
+                cumulative_icu.row(t) = cumulative_icu.row(t - 1) + daily_icu.row(t);
+                cumulative_deaths_from_flows.row(t) = cumulative_deaths_from_flows.row(t - 1) + daily_deaths.row(t);
+            }
+        }
+
         // Accumulate values for quantile calculation
         for (int t = 0; t < T; ++t) {
             for (int a = 0; a < A; ++a) {
                 hosp_acc[t][a](daily_hosp(t, a));
                 icu_acc[t][a](daily_icu(t, a));
                 death_acc[t][a](daily_deaths(t, a));
-                
-                // Cumulative values
-                double c_h_prev_max_val = NAN;
-                if (t > 0) {
-                    if (ba::count(c_hosp_acc[t-1][a]) > 0) {
-                        c_h_prev_max_val = ba::max(c_hosp_acc[t-1][a]);
-                    }
-                }
-                double c_h = (t > 0) ? (std::isnan(c_h_prev_max_val) ? NAN : c_h_prev_max_val + daily_hosp(t, a)) : daily_hosp(t, a);
-
-                double c_i_prev_max_val = NAN;
-                if (t > 0) {
-                    if (ba::count(c_icu_acc[t-1][a]) > 0) {
-                        c_i_prev_max_val = ba::max(c_icu_acc[t-1][a]);
-                    }
-                }
-                double c_i = (t > 0) ? (std::isnan(c_i_prev_max_val) ? NAN : c_i_prev_max_val + daily_icu(t, a)) : daily_icu(t, a);
-
-                double c_d_prev_max_val = NAN;
-                if (t > 0) {
-                    if (ba::count(c_death_acc[t-1][a]) > 0) {
-                        c_d_prev_max_val = ba::max(c_death_acc[t-1][a]);
-                    }
-                }
-                double c_d = (t > 0) ? (std::isnan(c_d_prev_max_val) ? NAN : c_d_prev_max_val + daily_deaths(t, a)) : daily_deaths(t, a);
-                
-                c_hosp_acc[t][a](c_h);
-                c_icu_acc[t][a](c_i);
-                c_death_acc[t][a](c_d);
+                c_hosp_acc[t][a](cumulative_hosp(t, a));
+                c_icu_acc[t][a](cumulative_icu(t, a));
+                c_death_acc[t][a](cumulative_deaths_from_flows(t, a));
             }
         }
         

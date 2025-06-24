@@ -81,7 +81,6 @@ std::vector<std::string> readParamsToCalibrate(const std::string &filename);
  */
 void saveCalibrationResults(const std::string &filename, 
                           const epidemic::SEPAIHRDParameters &parameters,
-                          const std::map<std::string, double> &calibrated_param_values_map, // Map of calibrated parameter names to their final values.
                           const std::vector<std::string>& actual_calibrated_param_names, // Vector of names for parameters that were actually part of the calibration set.
                           double obj_value,
                           const std::string &timestamp = "");

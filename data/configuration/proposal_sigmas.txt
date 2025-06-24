@@ -47,3 +47,12 @@ E0_multiplier   0.5
 P0_multiplier   0.5
 A0_multiplier   0.5
 I0_multiplier   0.5
+
+a_0      0.01
+a_1      0.01
+a_2      0.01
+a_3      0.01
+h_infec_0      0.01
+h_infec_1      0.01
+h_infec_2      0.01
+h_infec_3      0.01

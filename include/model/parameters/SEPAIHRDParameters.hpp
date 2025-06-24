@@ -29,6 +29,12 @@ struct SEPAIHRDParameters {
     /** @brief Transmission rate (infectiousness parameter) */
     double beta;
 
+    /** @brief Age-specific relative susceptibility vector */
+    Eigen::VectorXd a; 
+
+    /** @brief Age-specific relative infectiousness vector */
+    Eigen::VectorXd h_infec;
+
     /** @brief Reduced transmissibility of symptomatic individuals */
     double theta;
 
@@ -72,16 +78,16 @@ struct SEPAIHRDParameters {
     std::vector<double> kappa_values;
 
     /** @brief Multiplier for the initial number of exposed individuals (E0) */
-    double E0_multiplier = 1.0;
+    double E0_multiplier;
 
     /** @brief Multiplier for the initial number of presymptomatic individuals (P0) */
-    double P0_multiplier = 1.0;
+    double P0_multiplier;
 
     /** @brief Multiplier for the initial number of asymptomatic individuals (A0) */
-    double A0_multiplier = 1.0;
+    double A0_multiplier;
 
     /** @brief Multiplier for the initial number of symptomatic individuals (I0) */
-    double I0_multiplier = 1.0;
+    double I0_multiplier;
 
     /**
      * @brief Validates that all parameter dimensions are consistent
@@ -90,23 +96,34 @@ struct SEPAIHRDParameters {
      * @return true if parameters are valid, false otherwise
      */
     bool validate() const {
-        int n = N.size();
-        if (n <= 0) return false;
+        int num_age_classes = N.size();
+        if (num_age_classes == 0) return false;
+        
+        if (M_baseline.rows() != num_age_classes || M_baseline.cols() != num_age_classes ||
+            p.size() != num_age_classes || h.size() != num_age_classes ||
+            icu.size() != num_age_classes || d_H.size() != num_age_classes ||
+            d_ICU.size() != num_age_classes || a.size() != num_age_classes ||
+            h_infec.size() != num_age_classes) {
+            return false;
+        }
 
-        bool vector_ok = (p.size() == n) &&
-                         (h.size() == n) &&
-                         (icu.size() == n) &&
-                         (d_H.size() == n) &&
-                         (d_ICU.size() == n);
+        if (kappa_end_times.size() != kappa_values.size()) {
+            return false;
+        }
 
-        bool matrix_ok = (M_baseline.rows() == n && M_baseline.cols() == n);
-
-        bool multipliers_ok = (E0_multiplier >= 0.0) &&
-                              (P0_multiplier >= 0.0) &&
-                              (A0_multiplier >= 0.0) &&
-                              (I0_multiplier >= 0.0);
-
-        return vector_ok && matrix_ok && multipliers_ok;
+        if (beta < 0 || theta < 0 || sigma < 0 || gamma_p < 0 || gamma_A < 0 || 
+            gamma_I < 0 || gamma_H < 0 || gamma_ICU < 0) {
+            return false;
+        }
+        
+        if ((p.array() < 0).any() || (p.array() > 1).any() ||
+            (h_infec.array() < 0).any() || (icu.array() < 0).any() ||
+            (d_H.array() < 0).any() || (d_ICU.array() < 0).any() ||
+            (a.array() < 0).any() || (h.array() < 0).any()) {
+            return false;
+        }
+        
+        return true;
     }
 };
 

@@ -109,10 +109,6 @@ namespace epidemic {
         }
     }
     
-    const std::vector<double>& ModelCalibrator::getMCMCObjectiveValues() const {
-        return mcmcObjectiveValues_;
-    }
-    
     const std::vector<Eigen::VectorXd>& ModelCalibrator::getMCMCSamples() const {
         return phase2_result_.samples;
     }

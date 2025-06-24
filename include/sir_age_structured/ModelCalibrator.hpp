@@ -103,7 +103,7 @@ public:
      * @return const std::vector<double>& Vector of objective values, parallel to `getMCMCSamples()`. 
      *         Returns empty vector if no MCMC phase was executed.
      */
-    const std::vector<double>& getMCMCObjectiveValues() const;
+    const std::vector<double>& getMCMCObjectiveValues() const { return mcmcObjectiveValues_; }
 
     /**
      * @brief Get the parameter manager instance.

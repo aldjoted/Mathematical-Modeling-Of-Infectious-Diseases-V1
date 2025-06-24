@@ -14,7 +14,7 @@ namespace epidemic {
 
     AgeSEPAIHRDModel::AgeSEPAIHRDModel(const SEPAIHRDParameters& params, std::shared_ptr<INpiStrategy> npi_strategy_ptr)
         : num_age_classes(params.N.size()), N(params.N), M_baseline(params.M_baseline),
-          beta(params.beta), theta(params.theta),
+          beta(params.beta), a(params.a), h_infec(params.h_infec), theta(params.theta),
           sigma(params.sigma), gamma_p(params.gamma_p), gamma_A(params.gamma_A), gamma_I(params.gamma_I),
           gamma_H(params.gamma_H), gamma_ICU(params.gamma_ICU), p(params.p), h(params.h), icu(params.icu),
           d_H(params.d_H), d_ICU(params.d_ICU),
@@ -59,15 +59,19 @@ namespace epidemic {
             throw SimulationException("AgeSEPAIHRDModel::computeDerivatives", "NPI reduction factor cannot be negative.");
         }
         
-        Eigen::MatrixXd effective_contact = beta * current_reduction_factor * M_baseline;
+        // 1. Calculate the total infectious pressure exerted BY each age group, scaled by their infectiousness `h_infec`.
+        Eigen::VectorXd infectious_pressure = Eigen::VectorXd::Zero(n);
+        Eigen::VectorXd infectious_total = P.array() + A.array() + theta * I.array();
 
-        Eigen::VectorXd infectious_load_per_capita = Eigen::VectorXd::Zero(n);
         for (int j = 0; j < n; ++j) {
             if (N(j) > constants::MIN_POPULATION_FOR_DIVISION) {
-                infectious_load_per_capita(j) = (P(j) + A(j) + theta * I(j)) / N(j);
+                infectious_pressure(j) = h_infec(j) * infectious_total(j) / N(j);
             }
-        }
-        Eigen::VectorXd lambda = effective_contact * infectious_load_per_capita;
+        }    
+        // 2. Get the NPI-adjusted contact rates.
+        Eigen::MatrixXd effective_contact_matrix = current_reduction_factor * M_baseline;
+        // 3. Calculate the force of infection (lambda) for each age group.
+        Eigen::VectorXd lambda = beta * a.array() * (effective_contact_matrix * infectious_pressure).array();
         lambda = lambda.cwiseMax(0.0);
     
         Eigen::VectorXd dS = -lambda.array() * S.array();
@@ -129,8 +133,7 @@ namespace epidemic {
         return 9 * num_age_classes;
     }
     
-    std::vector<std::string> AgeSEPAIHRDModel::getStateNames() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> AgeSEPAIHRDModel::getStateNames() const {        
         std::vector<std::string> names;
         names.reserve(9 * num_age_classes);
         std::vector<std::string> compartments = {"S", "E", "P", "A", "I", "H", "ICU", "R", "D"};
@@ -146,29 +149,44 @@ namespace epidemic {
     int AgeSEPAIHRDModel::getNumAgeClasses() const {
         return num_age_classes;
     }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getPopulationSizes() const { std::lock_guard<std::mutex> lock(mutex_); return N; }
-    const Eigen::MatrixXd& AgeSEPAIHRDModel::getContactMatrix() const { std::lock_guard<std::mutex> lock(mutex_); return M_baseline; }
-    double AgeSEPAIHRDModel::getTransmissionRate() const { std::lock_guard<std::mutex> lock(mutex_); return beta; }
-    double AgeSEPAIHRDModel::getReducedTransmissibility() const { std::lock_guard<std::mutex> lock(mutex_); return theta; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getPopulationSizes() const { return N; }
+    const Eigen::MatrixXd& AgeSEPAIHRDModel::getContactMatrix() const { return M_baseline; }
+    double AgeSEPAIHRDModel::getTransmissionRate() const { return beta; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getSusceptibility() const { return a; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getInfectiousness() const { return h_infec; }
+    double AgeSEPAIHRDModel::getReducedTransmissibility() const { return theta; }
     
-    double AgeSEPAIHRDModel::getSigma() const { std::lock_guard<std::mutex> lock(mutex_); return sigma; }
-    double AgeSEPAIHRDModel::getGammaP() const { std::lock_guard<std::mutex> lock(mutex_); return gamma_p; }
-    double AgeSEPAIHRDModel::getGammaA() const { std::lock_guard<std::mutex> lock(mutex_); return gamma_A; }
-    double AgeSEPAIHRDModel::getGammaI() const { std::lock_guard<std::mutex> lock(mutex_); return gamma_I; }
-    double AgeSEPAIHRDModel::getGammaH() const { std::lock_guard<std::mutex> lock(mutex_); return gamma_H; }
-    double AgeSEPAIHRDModel::getGammaICU() const { std::lock_guard<std::mutex> lock(mutex_); return gamma_ICU; }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getProbAsymptomatic() const { std::lock_guard<std::mutex> lock(mutex_); return p; }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getHospRate() const { std::lock_guard<std::mutex> lock(mutex_); return h; }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getIcuRate() const { std::lock_guard<std::mutex> lock(mutex_); return icu; }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getMortalityRateH() const { std::lock_guard<std::mutex> lock(mutex_); return d_H; }
-    const Eigen::VectorXd& AgeSEPAIHRDModel::getMortalityRateICU() const { std::lock_guard<std::mutex> lock(mutex_); return d_ICU; }
+    double AgeSEPAIHRDModel::getSigma() const { return sigma; }
+    double AgeSEPAIHRDModel::getGammaP() const { return gamma_p; }
+    double AgeSEPAIHRDModel::getGammaA() const { return gamma_A; }
+    double AgeSEPAIHRDModel::getGammaI() const { return gamma_I; }
+    double AgeSEPAIHRDModel::getGammaH() const { return gamma_H; }
+    double AgeSEPAIHRDModel::getGammaICU() const { return gamma_ICU; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getProbAsymptomatic() const { return p; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getHospRate() const { return h; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getIcuRate() const { return icu; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getMortalityRateH() const { return d_H; }
+    const Eigen::VectorXd& AgeSEPAIHRDModel::getMortalityRateICU() const { return d_ICU; }
     
     void AgeSEPAIHRDModel::setTransmissionRate(double new_beta) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (new_beta < 0.0) THROW_INVALID_PARAM("setTransmissionRate", "Transmission rate cannot be negative.");
         beta = new_beta;
     }
-    
+
+    void AgeSEPAIHRDModel::setSusceptibility(const Eigen::VectorXd& new_a) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (new_a.size() != num_age_classes) THROW_INVALID_PARAM("setSusceptibility", "Susceptibility vector dimension mismatch.");
+        if ((new_a.array() < 0).any()) THROW_INVALID_PARAM("setSusceptibility", "Susceptibility values cannot be negative.");
+        a = new_a;
+    }
+    void AgeSEPAIHRDModel::setInfectiousness(const Eigen::VectorXd& new_h_infec) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (new_h_infec.size() != num_age_classes) THROW_INVALID_PARAM("setInfectiousness", "Infectiousness vector dimension mismatch.");
+        if ((new_h_infec.array() < 0).any()) THROW_INVALID_PARAM("setInfectiousness", "Infectiousness values cannot be negative.");
+        h_infec = new_h_infec;
+    }
+
     void AgeSEPAIHRDModel::setReducedTransmissibility(double new_theta) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (new_theta < 0.0) THROW_INVALID_PARAM("setReducedTransmissibility", "Reduced transmissibility factor cannot be negative.");
@@ -176,16 +194,17 @@ namespace epidemic {
     }
     
     std::shared_ptr<INpiStrategy> AgeSEPAIHRDModel::getNpiStrategy() const {
-         std::lock_guard<std::mutex> lock(mutex_);
          return npi_strategy;
     }
 
     SEPAIHRDParameters AgeSEPAIHRDModel::getModelParameters() const {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(mutex_); // Lock here as we are reading many members
         SEPAIHRDParameters params;
         params.N = N;
         params.M_baseline = M_baseline;
         params.contact_matrix_scaling_factor = 1.0;
+        params.a = a;
+        params.h_infec = h_infec;
         params.beta = beta;
         params.theta = theta;
         params.sigma = sigma;
@@ -212,7 +231,9 @@ namespace epidemic {
     void AgeSEPAIHRDModel::setModelParameters(const SEPAIHRDParameters& params) {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (params.N.size() != num_age_classes ||
+        if (params.N.size() != num_age_classes || 
+            params.a.size() != num_age_classes ||
+            params.h_infec.size() != num_age_classes ||
             params.p.size() != num_age_classes ||
             params.h.size() != num_age_classes ||
             params.icu.size() != num_age_classes ||
@@ -238,6 +259,8 @@ namespace epidemic {
 
         N = params.N;
         M_baseline = params.M_baseline;
+        a = params.a;
+        h_infec = params.h_infec;
         beta = params.beta;
         theta = params.theta;
         sigma = params.sigma;
@@ -256,7 +279,6 @@ namespace epidemic {
     }
 
     bool AgeSEPAIHRDModel::areInitialDeathsZero() const {
-        std::lock_guard<std::mutex> lock(mutex_);
         return true;
     }
     

@@ -3,8 +3,8 @@
 
 # --- Core MCMC Settings ---
 burn_in 0
-mcmc_iterations 2500
-thinning 10
+mcmc_iterations 20000
+thinning 100
 report_interval 10
 calculate_posterior_mean 1.0
 
@@ -14,7 +14,7 @@ mcmc_num_threads 4
 mcmc_enable_vectorization 1.0
 
 # --- Proposal & Refinement Strategy ---
-mcmc_step_size 0.005
+mcmc_step_size 0.05
 mcmc_enable_refinement 1.0
 mcmc_refinement_steps 5
 

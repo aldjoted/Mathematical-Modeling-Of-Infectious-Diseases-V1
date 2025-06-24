@@ -3,35 +3,40 @@
 kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 305.0
 
 # --- Disease transmission parameters ---
-beta 2.613671e-01
-theta 4.042928e-01
+beta 4.339339e-01
+# Susceptibility vector 'a' (4 age groups)
+a 0.500000e+00 0.500000e+00 0.500000e+00 0.500000e+00
+# Infectiousness vector 'h' (4 age groups)
+h_infec 0.500000e+00 0.500000e+00 0.500000e+00 0.500000e+00
+
+theta 3.000000e-01
 
 # --- Disease progression rates (inverse durations) ---
-sigma 5.999982e-01
-gamma_p 9.999827e-01
-gamma_A 3.114207e-01
-gamma_I 3.999979e-01
-gamma_H 1.499999e-01
-gamma_ICU 1.249974e-01
+sigma 0.4
+gamma_p 9.999821e-01
+gamma_A 4.000000e-01
+gamma_I 4.000000e-01
+gamma_H 1.500000e-01
+gamma_ICU 1.247480e-01
 
 # --- NPI scaling factors (kappa_values) ---
 # kappa_1 is fixed
-kappa_values 1.000000e+00 5.112686e-01 2.500000e-01 6.060849e-01 9.005816e-01 1.000005e+00 1.591450e+00
+kappa_values 1.000000e+00 5.000000e-01 2.510464e-01 9.999299e-01 1.158312e+00 1.235530e+00 1.100000e+00
 
 # --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
 # Fraction asymptomatic (p)
-p 5.763349e-01 5.169721e-01 7.940610e-01 6.570475e-01
+p 4.643347e-01 2.000000e-01 4.983577e-01 4.779936e-01
 # Hospitalization rate (h)
-h 8.000151e-04 3.172323e-03 2.433713e-02 3.360479e-02
+h 8.000000e-04 1.868376e-03 1.000000e-02 2.197453e-02
 # ICU admission rate (icu)
-icu 6.791056e-03 2.001319e-02 3.200861e-02 1.500775e-02
+icu 5.169039e-03 2.002290e-02 3.004539e-02 1.500000e-02
 # Hospital mortality rate (d_H)
-d_H 1.180208e-03 5.143083e-03 3.775044e-02 2.630786e-01
+d_H 1.000000e-03 5.183889e-03 3.459744e-02 2.296960e-01
 # ICU mortality rate (d_ICU)
-d_ICU 1.221620e-03 1.078149e-02 3.055391e-02 7.000001e-02
+d_ICU 1.362702e-03 1.000000e-02 3.000000e-02 7.032163e-02
 
 # Initial State Multipliers
-E0_multiplier 1.0
-P0_multiplier 1.0
-A0_multiplier 1.0
-I0_multiplier 1.0
+E0_multiplier 0.651452
+P0_multiplier 0.711506
+A0_multiplier 1.943085
+I0_multiplier 1.534489

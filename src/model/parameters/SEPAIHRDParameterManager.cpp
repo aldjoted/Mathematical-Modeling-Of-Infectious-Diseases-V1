@@ -27,6 +27,22 @@ SEPAIHRDParameterManager::SEPAIHRDParameterManager(
     }
 
     int num_age_groups = model_->getNumAgeClasses();
+
+    auto validate_age_param = [&](const std::string& param_name, const std::string& prefix) {
+        if (param_name.rfind(prefix, 0) == 0) {
+            try {
+                size_t idx = std::stoul(param_name.substr(prefix.length()));
+                if (idx >= static_cast<size_t>(num_age_groups)) {
+                    THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Invalid age index for parameter " + param_name);
+                }
+            } catch (const std::exception& e) {
+                THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse age index from: " + param_name);
+            }
+            return true;
+        }
+        return false;
+    };
+
     for (const auto& name : param_names_) {
         if (proposal_sigmas_.find(name) == proposal_sigmas_.end()) {
             THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Missing proposal sigma for parameter: " + name);
@@ -34,36 +50,7 @@ SEPAIHRDParameterManager::SEPAIHRDParameterManager(
         if (param_bounds_.find(name) == param_bounds_.end()) {
             THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Missing bounds for parameter: " + name);
         }
-
-        if (name.length() > 2 && name[1] == '_') { 
-            std::string prefix = name.substr(0, 2);
-            if (prefix == "p_" || prefix == "h_") {
-                try {
-                    size_t idx = std::stoul(name.substr(2));
-                    if (idx >= static_cast<size_t>(num_age_groups)) {
-                        THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Invalid age index for parameter " + name);
-                    }
-                } catch (const std::exception& e) { THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse age index from: " + name); }
-            }
-        } else if (name.length() > 4 && name[3] == '_') {
-             if (name.rfind("icu_", 0) == 0) {
-                try {
-                    size_t idx = std::stoul(name.substr(4));
-                     if (idx >= static_cast<size_t>(num_age_groups)) {THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Invalid age index for parameter " + name); }
-                } catch (const std::exception& e) { THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse age index from: " + name); }
-             }
-        }
-        else if (name.length() > 4 && name.substr(0,4) == "d_H_") {
-             try {
-                 size_t idx = std::stoul(name.substr(4));
-                 if (idx >= static_cast<size_t>(num_age_groups)) {THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Invalid age index for parameter " + name); }
-             } catch (const std::exception& e) { THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse age index from: " + name); }
-        } else if (name.length() > 6 && name.substr(0,6) == "d_ICU_") {
-             try {
-                 size_t idx = std::stoul(name.substr(6));
-                 if (idx >= static_cast<size_t>(num_age_groups)) {THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Invalid age index for parameter " + name); }
-             } catch (const std::exception& e) { THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse age index from: " + name); }
-        }
+        validate_age_param(name, "a_") || validate_age_param(name, "h_infec_") || validate_age_param(name, "p_") || validate_age_param(name, "h_") || validate_age_param(name, "icu_") || validate_age_param(name, "d_H_") || validate_age_param(name, "d_ICU_");
 
         if (name.rfind("kappa_", 0) == 0) {
             auto npi_strat_base = model_->getNpiStrategy();
@@ -113,6 +100,8 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name == "A0_multiplier") current_params_vec[i] = model_params_struct.A0_multiplier;
         else if (name == "I0_multiplier") current_params_vec[i] = model_params_struct.I0_multiplier;
         // Age-specific parameters
+        else if (name.rfind("a_", 0) == 0) current_params_vec[i] = model_params_struct.a(std::stoul(name.substr(2)));
+        else if (name.rfind("h_infec_", 0) == 0) current_params_vec[i] = model_params_struct.h_infec(std::stoul(name.substr(8)));
         else if (name.rfind("p_", 0) == 0) current_params_vec[i] = model_params_struct.p(std::stoul(name.substr(2)));
         else if (name.rfind("h_", 0) == 0) current_params_vec[i] = model_params_struct.h(std::stoul(name.substr(2)));
         else if (name.rfind("icu_", 0) == 0) current_params_vec[i] = model_params_struct.icu(std::stoul(name.substr(4)));
@@ -147,10 +136,10 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
     SEPAIHRDParameters current_model_params_struct = model_->getModelParameters();
     bool model_params_struct_needs_update = false;
 
-    std::vector<double> collected_calibratable_npi_values;
-    bool npi_values_need_update = false;
-
     auto npi_strat_base = model_->getNpiStrategy();
+    bool npi_values_need_update = false;
+    std::vector<double> collected_calibratable_npi_values;
+
     PiecewiseConstantNpiStrategy* piecewise_npi_strat = nullptr;
     if (npi_strat_base) {
         piecewise_npi_strat = dynamic_cast<PiecewiseConstantNpiStrategy*>(npi_strat_base.get());
@@ -159,7 +148,6 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         }
     }
 
-    int current_calibratable_npi_idx = 0;
     for (size_t i = 0; i < param_names_.size(); ++i) {
         const std::string& name = param_names_[i];
         double value = constrained_params[i];
@@ -173,6 +161,8 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         else if (name == "gamma_I") { current_model_params_struct.gamma_I = value; model_params_struct_needs_update = true; }
         else if (name == "gamma_H") { current_model_params_struct.gamma_H = value; model_params_struct_needs_update = true; }
         else if (name == "gamma_ICU") { current_model_params_struct.gamma_ICU = value; model_params_struct_needs_update = true; }
+        else if (name.rfind("a_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.a(idx) = value; model_params_struct_needs_update = true; }
+        else if (name.rfind("h_infec_", 0) == 0) { size_t idx = std::stoul(name.substr(8)); current_model_params_struct.h_infec(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("p_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.p(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("h_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.h(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
@@ -188,21 +178,12 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
             if (!piecewise_npi_strat) {
                 throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Attempting to update kappa parameter '" + name + "' but NPI strategy is null or not PiecewiseConstant.");
             }
-            bool name_matched_to_calibratable_npi = false;
             for(size_t npi_cal_idx = 0; npi_cal_idx < piecewise_npi_strat->getNumCalibratableNpiParams(); ++npi_cal_idx) {
                 if (piecewise_npi_strat->getNpiParamName(npi_cal_idx) == name) {
-                    if (current_calibratable_npi_idx < static_cast<int>(collected_calibratable_npi_values.size())) {
-                         collected_calibratable_npi_values[npi_cal_idx] = value;
-                         npi_values_need_update = true;
-                         name_matched_to_calibratable_npi = true;
-                    } else {
-                        throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Indexing error for collected_calibratable_npi_values for " + name);
-                    }
+                    collected_calibratable_npi_values[npi_cal_idx] = value;
+                    npi_values_need_update = true;
                     break; 
                 }
-            }
-            if (!name_matched_to_calibratable_npi) {
-                 throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Calibratable NPI parameter '" + name + "' not found in strategy's list of calibratable NPIs.");
             }
         } else {
              std::cerr << "[Warning] SEPAIHRDParameterManager: Unknown parameter name '" << name << "' encountered during updateModelParameters map construction." << std::endl;
@@ -285,42 +266,6 @@ double SEPAIHRDParameterManager::getUpperBoundForParamIndex(int idx) const {
          THROW_INVALID_PARAM("SEPAIHRDParameterManager::getUpperBoundForParamIndex", "Bounds not found for parameter: " + name);
     }
     return it->second.second;
-}
-
-void PiecewiseConstantNpiStrategy::setCalibratableValues(const std::vector<double>& calibratable_values) {
-    if (calibratable_values.size() != getNumCalibratableNpiParams()) {
-        THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues",
-                            "Input vector size (" + std::to_string(calibratable_values.size()) +
-                            ") does not match the number of calibratable NPI parameters (" +
-                            std::to_string(getNumCalibratableNpiParams()) + ").");
-    }
-
-    for(double val : calibratable_values) {
-        if (val < 0.0) {
-            THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues", "All NPI kappa values must be non-negative.");
-        }
-    }
-
-    size_t current_idx = 0;
-    if (!is_baseline_fixed_) {
-        if (calibratable_values.empty()) {
-             THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues", "Calibratable values vector is empty but baseline is not fixed.");
-        }
-        baseline_kappa_value_ = calibratable_values[current_idx];
-        current_idx++;
-    }
-
-    if (calibratable_values.size() - current_idx != npi_kappa_values_.size()) {
-        THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues",
-                            "Mismatch in the number of remaining calibratable values (" +
-                            std::to_string(calibratable_values.size() - current_idx) +
-                            ") and the size of npi_kappa_values_ (" +
-                            std::to_string(npi_kappa_values_.size()) + ").");
-    }
-
-    for (size_t i = 0; i < npi_kappa_values_.size(); ++i) {
-        npi_kappa_values_[i] = calibratable_values[current_idx + i];
-    }
 }
 
 } // namespace epidemic

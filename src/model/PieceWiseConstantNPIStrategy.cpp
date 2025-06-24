@@ -206,4 +206,50 @@ double PiecewiseConstantNpiStrategy::getUpperBoundForParamIndex(int calibratable
     return DEFAULT_UPPER_BOUND;
 }
 
+void PiecewiseConstantNpiStrategy::setCalibratableValues(const std::vector<double>& calibratable_values) {
+    if (calibratable_values.size() != getNumCalibratableNpiParams()) {
+        THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues",
+                            "Input vector size (" + std::to_string(calibratable_values.size()) +
+                            ") does not match the number of calibratable NPI parameters (" +
+                            std::to_string(getNumCalibratableNpiParams()) + ").");
+    }
+
+    for(double val : calibratable_values) {
+        if (val < 0.0) {
+            THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues", "All NPI kappa values must be non-negative.");
+        }
+    }
+
+    size_t current_idx = 0;
+    if (!is_baseline_fixed_) {
+        if (calibratable_values.empty()) {
+             THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues", "Calibratable values vector is empty but baseline is not fixed.");
+        }
+        baseline_kappa_value_ = calibratable_values[current_idx];
+        current_idx++;
+    }
+
+    if (calibratable_values.size() - current_idx != npi_kappa_values_.size()) {
+        THROW_INVALID_PARAM("PiecewiseConstantNpiStrategy::setCalibratableValues",
+                            "Mismatch in the number of remaining calibratable values (" +
+                            std::to_string(calibratable_values.size() - current_idx) +
+                            ") and the size of npi_kappa_values_ (" +
+                            std::to_string(npi_kappa_values_.size()) + ").");
+    }
+
+    for (size_t i = 0; i < npi_kappa_values_.size(); ++i) {
+        npi_kappa_values_[i] = calibratable_values[current_idx + i];
+    }
+}
+
+std::vector<double> PiecewiseConstantNpiStrategy::getCalibratableValues() const {
+    std::vector<double> values;
+    values.reserve(getNumCalibratableNpiParams());
+    if (!is_baseline_fixed_) {
+        values.push_back(baseline_kappa_value_);
+    }
+    values.insert(values.end(), npi_kappa_values_.begin(), npi_kappa_values_.end());
+    return values;
+}
+
 } // namespace epidemic

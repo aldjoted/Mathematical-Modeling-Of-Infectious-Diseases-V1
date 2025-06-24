@@ -338,7 +338,7 @@ int main(int argc, char* argv[]) {
             string calibrated_params_output_path = FileUtils::joinPaths(output_dir, "calibrated_parameters_final.txt");
             Logger::getInstance().info("main", "Saving calibrated parameters to: " + calibrated_params_output_path);
             saveCalibrationResults(
-                calibrated_params_output_path, final_calibrated_params, calibrated_param_map,
+                calibrated_params_output_path, final_calibrated_params,
                 actual_calibrated_names, best_obj_val, ""
             );
             

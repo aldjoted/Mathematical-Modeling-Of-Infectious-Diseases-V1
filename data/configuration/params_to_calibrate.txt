@@ -40,6 +40,15 @@ d_ICU_0
 d_ICU_1
 d_ICU_2
 d_ICU_3
+# Infec / Sucep
+a_0
+a_1
+a_2
+a_3
+h_infec_0
+h_infec_1
+h_infec_2
+h_infec_3
 
 # NPI scaling factors (kappa_period_X, corresponding to periods 2 through 8 from Table 1)
 kappa_2
