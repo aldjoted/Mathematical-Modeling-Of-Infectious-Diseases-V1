@@ -57,10 +57,13 @@ kappa_4
 kappa_5
 kappa_6
 kappa_7
-#kappa_8
 
 # --- Initial State Multiplier Parameters ---
 E0_multiplier
 P0_multiplier
 A0_multiplier
 I0_multiplier
+H0_multiplier
+ICU0_multiplier
+R0_multiplier
+D0_multiplier

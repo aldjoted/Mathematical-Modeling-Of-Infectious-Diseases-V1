@@ -99,6 +99,10 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name == "P0_multiplier") current_params_vec[i] = model_params_struct.P0_multiplier;
         else if (name == "A0_multiplier") current_params_vec[i] = model_params_struct.A0_multiplier;
         else if (name == "I0_multiplier") current_params_vec[i] = model_params_struct.I0_multiplier;
+        else if (name == "H0_multiplier") current_params_vec[i] = model_params_struct.H0_multiplier;
+        else if (name == "ICU0_multiplier") current_params_vec[i] = model_params_struct.ICU0_multiplier;
+        else if (name == "R0_multiplier") current_params_vec[i] = model_params_struct.R0_multiplier;
+        else if (name == "D0_multiplier") current_params_vec[i] = model_params_struct.D0_multiplier;
         // Age-specific parameters
         else if (name.rfind("a_", 0) == 0) current_params_vec[i] = model_params_struct.a(std::stoul(name.substr(2)));
         else if (name.rfind("h_infec_", 0) == 0) current_params_vec[i] = model_params_struct.h_infec(std::stoul(name.substr(8)));
@@ -171,9 +175,14 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.d_H(idx) = value; model_params_struct_needs_update = true; }
         else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); current_model_params_struct.d_ICU(idx) = value; model_params_struct_needs_update = true; }
-        else if (name == "E0_multiplier" || name == "P0_multiplier" || name == "A0_multiplier" || name == "I0_multiplier") {
-            // These parameters are used by the objective function, not the model directly. No action needed here.
-        }        
+        else if (name == "E0_multiplier") { current_model_params_struct.E0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "P0_multiplier") { current_model_params_struct.P0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "A0_multiplier") { current_model_params_struct.A0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "I0_multiplier") { current_model_params_struct.I0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "H0_multiplier") { current_model_params_struct.H0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "ICU0_multiplier") { current_model_params_struct.ICU0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "R0_multiplier") { current_model_params_struct.R0_multiplier = value; model_params_struct_needs_update = true; }
+        else if (name == "D0_multiplier") { current_model_params_struct.D0_multiplier = value; model_params_struct_needs_update = true; }       
         else if (name.rfind("kappa_", 0) == 0) {
             if (!piecewise_npi_strat) {
                 throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Attempting to update kappa parameter '" + name + "' but NPI strategy is null or not PiecewiseConstant.");

@@ -18,7 +18,7 @@ namespace epidemic {
           sigma(params.sigma), gamma_p(params.gamma_p), gamma_A(params.gamma_A), gamma_I(params.gamma_I),
           gamma_H(params.gamma_H), gamma_ICU(params.gamma_ICU), p(params.p), h(params.h), icu(params.icu),
           d_H(params.d_H), d_ICU(params.d_ICU),
-          npi_strategy(npi_strategy_ptr), baseline_beta(params.beta), baseline_theta(params.theta) {
+          npi_strategy(npi_strategy_ptr), baseline_beta(params.beta), baseline_theta(params.theta), E0_multiplier(params.E0_multiplier), P0_multiplier(params.P0_multiplier), A0_multiplier(params.A0_multiplier), I0_multiplier(params.I0_multiplier), H0_multiplier(params.H0_multiplier), ICU0_multiplier(params.ICU0_multiplier), R0_multiplier(params.R0_multiplier), D0_multiplier(params.D0_multiplier) {
     
         if (!params.validate()) {
             THROW_INVALID_PARAM("AgeSEPAIHRDModel", "Invalid SEPAIHRD parameters dimensions or sizes.");
@@ -213,6 +213,14 @@ namespace epidemic {
         params.gamma_I = gamma_I;
         params.gamma_H = gamma_H;
         params.gamma_ICU = gamma_ICU;
+        params.E0_multiplier = E0_multiplier;
+        params.P0_multiplier = P0_multiplier;
+        params.A0_multiplier = A0_multiplier;
+        params.I0_multiplier = I0_multiplier;
+        params.H0_multiplier = H0_multiplier;
+        params.ICU0_multiplier = ICU0_multiplier;
+        params.R0_multiplier = R0_multiplier;
+        params.D0_multiplier = D0_multiplier;
         params.p = p;
         params.h = h;
         params.icu = icu;
@@ -269,6 +277,14 @@ namespace epidemic {
         gamma_I = params.gamma_I;
         gamma_H = params.gamma_H;
         gamma_ICU = params.gamma_ICU;
+        E0_multiplier = params.E0_multiplier;
+        P0_multiplier = params.P0_multiplier;
+        A0_multiplier = params.A0_multiplier;
+        I0_multiplier = params.I0_multiplier;
+        H0_multiplier = params.H0_multiplier;
+        ICU0_multiplier = params.ICU0_multiplier;
+        R0_multiplier = params.R0_multiplier;
+        D0_multiplier = params.D0_multiplier;
         p = params.p;
         h = params.h;
         icu = params.icu;

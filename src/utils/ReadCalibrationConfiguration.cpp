@@ -74,6 +74,8 @@ void saveCalibrationResults(const std::string &filename,
     };
 
     writeAgeVectorParam("p", parameters.p);
+    writeAgeVectorParam("a", parameters.a);
+    writeAgeVectorParam("h_infec", parameters.h_infec);
     writeAgeVectorParam("h", parameters.h);
     writeAgeVectorParam("icu", parameters.icu);
     writeAgeVectorParam("d_H", parameters.d_H);
@@ -84,6 +86,10 @@ void saveCalibrationResults(const std::string &filename,
     writeScalarParam("P0_multiplier", parameters.P0_multiplier);
     writeScalarParam("A0_multiplier", parameters.A0_multiplier);
     writeScalarParam("I0_multiplier", parameters.I0_multiplier);
+    writeScalarParam("H0_multiplier", parameters.H0_multiplier);
+    writeScalarParam("ICU0_multiplier", parameters.ICU0_multiplier);
+    writeScalarParam("R0_multiplier", parameters.R0_multiplier);
+    writeScalarParam("D0_multiplier", parameters.D0_multiplier);
 
     file << std::endl << "# NPI strategy parameters" << std::endl;
 
@@ -214,6 +220,37 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
             else if (param_name == "P0_multiplier") params.P0_multiplier = value;
             else if (param_name == "A0_multiplier") params.A0_multiplier = value;
             else if (param_name == "I0_multiplier") params.I0_multiplier = value;
+            else if (param_name == "H0_multiplier") params.H0_multiplier = value;
+            else if (param_name == "ICU0_multiplier") params.ICU0_multiplier = value;
+            else if (param_name == "R0_multiplier") params.R0_multiplier = value;
+            else if (param_name == "D0_multiplier") params.D0_multiplier = value;
+            else if (param_name == "N") {
+                for (int i = 0; i < num_age_classes; ++i) {
+                    if (!(iss >> value)) {
+                        throw std::runtime_error("Error reading population value for age class " + std::to_string(i) +
+                                                   " on line " + std::to_string(line_number));
+                    }
+                    params.N(i) = value;
+                }
+                double extra;
+                if (iss >> extra) {
+                    throw std::runtime_error("Too many values provided for population vector 'N' on line " + std::to_string(line_number));
+                }
+            } else if (param_name == "M_baseline") {
+                for (int i = 0; i < num_age_classes; ++i) {
+                    for (int j = 0; j < num_age_classes; ++j) {
+                        if (!(iss >> value)) {
+                            throw std::runtime_error("Error reading contact matrix value at (" + std::to_string(i) + ", " + std::to_string(j) +
+                                                       ") on line " + std::to_string(line_number));
+                        }
+                        params.M_baseline(i, j) = value;
+                    }
+                }
+                double extra;
+                if (iss >> extra) {
+                    throw std::runtime_error("Too many values provided for contact matrix 'M_baseline' on line " + std::to_string(line_number));
+                }
+            }
             else {
                 epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Unrecognized parameter name '" + param_name +
                                                        "' on line " + std::to_string(line_number) + ". Ignoring.");

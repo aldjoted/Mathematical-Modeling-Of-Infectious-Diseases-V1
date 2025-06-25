@@ -43,10 +43,15 @@ kappa_6 0.08
 kappa_7 0.05
 #kappa_8 0.06
 
+# --- Initial State Multipliers ---
 E0_multiplier   0.5
 P0_multiplier   0.5
 A0_multiplier   0.5
 I0_multiplier   0.5
+H0_multiplier   0.5
+ICU0_multiplier 0.5
+R0_multiplier   0.5
+D0_multiplier   0.5
 
 a_0      0.01
 a_1      0.01

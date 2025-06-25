@@ -2,10 +2,10 @@
 # For boolean flags, use 1.0 for true and 0.0 for false.
 
 # --- Core MCMC Settings ---
-burn_in 0
-mcmc_iterations 20000
+burn_in 5
+mcmc_iterations 25000
 thinning 100
-report_interval 10
+report_interval 100
 calculate_posterior_mean 1.0
 
 # --- Performance & Parallelization Settings ---

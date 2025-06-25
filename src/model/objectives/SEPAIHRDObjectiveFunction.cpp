@@ -120,6 +120,10 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
     double p0_mult = get_multiplier("P0_multiplier");
     double a0_mult = get_multiplier("A0_multiplier");
     double i0_mult = get_multiplier("I0_multiplier");
+    double h0_mult = get_multiplier("H0_multiplier");
+    double icu0_mult = get_multiplier("ICU0_multiplier");
+    double r0_mult = get_multiplier("R0_multiplier");
+    double d0_mult = get_multiplier("D0_multiplier");
 
     // Crucially, recalculate S to maintain the population constraint
     const Eigen::VectorXd& N = model_->getPopulationSizes();
@@ -136,11 +140,29 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
         initial_state_for_run(i) = N(i) - sum_non_S;
     }
 
-    // Apply multipliers to the "seed" compartments (E, P, A, I)
-    initial_state_for_run.segment(1 * n_ages, n_ages) *= e0_mult;
-    initial_state_for_run.segment(2 * n_ages, n_ages) *= p0_mult;
-    initial_state_for_run.segment(3 * n_ages, n_ages) *= a0_mult;
-    initial_state_for_run.segment(4 * n_ages, n_ages) *= i0_mult;
+    // Apply multipliers to all compartments (except S which is calculated as remainder)
+    initial_state_for_run.segment(1 * n_ages, n_ages) *= e0_mult;   // E
+    initial_state_for_run.segment(2 * n_ages, n_ages) *= p0_mult;   // P
+    initial_state_for_run.segment(3 * n_ages, n_ages) *= a0_mult;   // A
+    initial_state_for_run.segment(4 * n_ages, n_ages) *= i0_mult;   // I
+    initial_state_for_run.segment(5 * n_ages, n_ages) *= h0_mult;   // H
+    initial_state_for_run.segment(6 * n_ages, n_ages) *= icu0_mult; // ICU
+    initial_state_for_run.segment(7 * n_ages, n_ages) *= r0_mult;   // R
+    initial_state_for_run.segment(8 * n_ages, n_ages) *= d0_mult;   // D
+
+    // Recalculate S to maintain population constraint (S = N - sum of all other compartments)
+    for (int i = 0; i < n_ages; ++i) {
+        double sum_non_S = 0.0;
+        for (int j = 1; j < 9; ++j) { // Sum E through D
+            sum_non_S += initial_state_for_run(j * n_ages + i);
+        }
+        
+        if (sum_non_S > N(i) || sum_non_S < 0) {
+            Logger::getInstance().warning(F_NAME, "Sum of initial compartments (" + std::to_string(sum_non_S) + ") is invalid for population N(" + std::to_string(i) + ") = " + std::to_string(N(i)));
+            return std::numeric_limits<double>::lowest();
+        }
+        initial_state_for_run(i) = N(i) - sum_non_S;  // S compartment
+    }
     
     if (!cached_sim_data_.isValid(parameters)) {
         //Logger::getInstance().debug(F_NAME, "Internal simulation data cache miss or invalid. Running simulation for parameters: " + formatParameters(parameters));

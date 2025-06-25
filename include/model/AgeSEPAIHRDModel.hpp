@@ -87,6 +87,31 @@ namespace epidemic {
     
         /** @brief Mutex for thread safety on getters/setters and internal state modification. */
         mutable std::mutex mutex_; 
+
+        // Add these private member variables:
+        double E0_multiplier = 1.0;
+        double P0_multiplier = 1.0;
+        double A0_multiplier = 1.0;
+        double I0_multiplier = 1.0;
+        double H0_multiplier = 1.0;
+        double ICU0_multiplier = 1.0;
+        double R0_multiplier = 1.0;
+        double D0_multiplier = 1.0;
+
+        // --- Private helper methods ---
+        /**
+         * @brief Computes the current kappa value based on the NPI strategy and time.
+         * @param time Current simulation time
+         * @return Current kappa value
+         */
+        double computeKappa(double time) const;
+
+        /**
+         * @brief Computes the current contact matrix scaled by kappa.
+         * @param time Current simulation time
+         * @return Scaled contact matrix
+         */
+        Eigen::MatrixXd computeContactMatrix(double time) const;
     
     public:
         /**

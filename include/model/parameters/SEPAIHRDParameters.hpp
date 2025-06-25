@@ -89,6 +89,18 @@ struct SEPAIHRDParameters {
     /** @brief Multiplier for the initial number of symptomatic individuals (I0) */
     double I0_multiplier;
 
+    /** @brief Multiplier for the initial number of hospitalized individuals (H0) */
+    double H0_multiplier;
+
+    /** @brief Multiplier for the initial number of ICU individuals (ICU0) */
+    double ICU0_multiplier;
+
+    /** @brief Multiplier for the initial number of recovered individuals (R0) */
+    double R0_multiplier;
+
+    /** @brief Multiplier for the initial number of deceased individuals (D0) */
+    double D0_multiplier;
+
     /**
      * @brief Validates that all parameter dimensions are consistent
      * @details Checks that all vector parameters have the same length as the population vector
