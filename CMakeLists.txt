@@ -73,6 +73,7 @@ set(EPIDEMIC_MODELS_SRCS
     src/model/objectives/SEPAIHRDObjectiveFunction.cpp
     src/model/SEPAIHRDModelCalibration.cpp
     src/model/optimizers/ParticleSwarmOptimizer.cpp
+    src/model/optimizers/NUTSSampler.cpp
     src/model/ReproductionNumberCalculator.cpp
     src/model/PostCalibrationAnalyser.cpp
 )

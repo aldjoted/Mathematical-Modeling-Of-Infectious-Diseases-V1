@@ -1,0 +1,13 @@
+# NUTS (No-U-Turn Sampler) Configuration File
+# Settings for the NUTS algorithm
+
+# Number of warmup iterations for step size adaptation
+nuts_warmup 5
+
+# Number of samples to collect after warmup
+nuts_samples 2000
+
+# Higher values (0.8-0.95) are recommended for NUTS
+nuts_delta_target 0.8
+
+nuts_max_tree_depth 10

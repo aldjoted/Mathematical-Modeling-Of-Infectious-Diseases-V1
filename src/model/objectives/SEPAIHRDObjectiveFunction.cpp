@@ -32,8 +32,8 @@ SEPAIHRDObjectiveFunction::SEPAIHRDObjectiveFunction(
     std::shared_ptr<IOdeSolverStrategy> solver_strategy,
     double abs_error,
     double rel_error)
-    : model_(model),
-      parameterManager_(parameterManager),
+    : parameterManager_(parameterManager),
+      model_(model),
       cache_(cache),
       observed_data_(calibration_data),
       time_points_(time_points),
@@ -65,7 +65,7 @@ SEPAIHRDObjectiveFunction::SEPAIHRDObjectiveFunction(
     Logger::getInstance().debug(F_NAME, "Initialization successful.");
 }
 
-void SEPAIHRDObjectiveFunction::preallocateInternalMatrices() {
+void SEPAIHRDObjectiveFunction::preallocateInternalMatrices() const {
     const std::string F_NAME = "SEPAIHRDObjectiveFunction::preallocateInternalMatrices";
     if (model_ && !time_points_.empty()) {
         int rows = static_cast<int>(time_points_.size());
@@ -86,7 +86,7 @@ void SEPAIHRDObjectiveFunction::preallocateInternalMatrices() {
 }
 
 
-double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
+double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) const {
     const std::string F_NAME = "SEPAIHRDObjectiveFunction::calculate";
     std::string cache_key_likelihood = cache_.createCacheKey(parameters);
     double cached_likelihood_value;
@@ -216,10 +216,6 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
         Eigen::VectorXd h_rates = model_->getHospRate(); 
         Eigen::VectorXd icu_admission_rates = model_->getIcuRate(); 
         
-        // Calculate incidence using element-wise multiplication with age-specific rates
-        // This is equivalent to multiplying each column of the compartment data by the corresponding rate.
-        // Using rowwise multiplication with transposed rates is a clean way to express this.
-        // The .matrix() call converts the resulting Array back to a Matrix for assignment.
         simulated_hospitalizations_ = (cached_sim_data_.I_data.array().rowwise() * h_rates.transpose().array()).matrix();
         simulated_icu_admissions_ = (cached_sim_data_.H_data.array().rowwise() * icu_admission_rates.transpose().array()).matrix();
         
@@ -248,21 +244,15 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) {
     const Eigen::MatrixXd& observed_hospitalizations = observed_data_.getNewHospitalizations();
     const Eigen::MatrixXd& observed_icu_admissions = observed_data_.getNewICU();
     const Eigen::MatrixXd& observed_deaths = observed_data_.getNewDeaths();
-    
-    // Parallel likelihood calculation
-    //Logger::getInstance().debug(F_NAME, "Calculating log-likelihoods (potentially in parallel).");
 
     auto future_ll_hosp = std::async(std::launch::async, [&]() {
-        //Logger::getInstance().debug(F_NAME, "Calculating log-likelihood for hospitalizations (async).");
         return calculateSingleLogLikelihood(simulated_hospitalizations_, observed_hospitalizations, "Hospitalizations");
     });
 
     auto future_ll_icu = std::async(std::launch::async, [&]() {
-        //Logger::getInstance().debug(F_NAME, "Calculating log-likelihood for ICU admissions (async).");
         return calculateSingleLogLikelihood(simulated_icu_admissions_, observed_icu_admissions, "ICU Admissions");
     });
 
-    //Logger::getInstance().debug(F_NAME, "Calculating log-likelihood for deaths (sync).");
     double ll_deaths = calculateSingleLogLikelihood(simulated_deaths_, observed_deaths, "Deaths");
     
     double ll_hosp = future_ll_hosp.get();
@@ -355,7 +345,7 @@ double SEPAIHRDObjectiveFunction::calculateSingleLogLikelihood(
     return log_likelihood;
 }
 
-void SEPAIHRDObjectiveFunction::ensureSimulatorExists() {
+void SEPAIHRDObjectiveFunction::ensureSimulatorExists() const {
     const std::string F_NAME = "SEPAIHRDObjectiveFunction::ensureSimulatorExists";
     if (!simulator_) {
         Logger::getInstance().debug(F_NAME, "Simulator instance not found, creating new instance.");
@@ -386,7 +376,7 @@ void SEPAIHRDObjectiveFunction::ensureSimulatorExists() {
                 abs_err_, 
                 rel_err_
             );
-           // Logger::getInstance().info(F_NAME, "Simulator instance created successfully.");
+           Logger::getInstance().info(F_NAME, "Simulator instance created successfully.");
         } catch (const std::exception& e) {
             Logger::getInstance().fatal(F_NAME, "Failed to create simulator instance. Error: " + std::string(e.what()));
             throw SimulationException("SEPAIHRDObjectiveFunction::ensureSimulatorExists",

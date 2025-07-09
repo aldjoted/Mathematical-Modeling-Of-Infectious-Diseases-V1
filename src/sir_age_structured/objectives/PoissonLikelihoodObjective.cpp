@@ -43,7 +43,7 @@ namespace epidemic {
         parameterNames_ = parameterManager.getParameterNames();
     }
 
-    double PoissonLikelihoodObjective::calculate(const Eigen::VectorXd& parameters) {
+    double PoissonLikelihoodObjective::calculate(const Eigen::VectorXd& parameters) const {
         std::optional<double> cached_result = cache_.get(parameters);
         if (cached_result.has_value()) {
             return cached_result.value();
@@ -111,7 +111,7 @@ namespace epidemic {
     }
 
     double PoissonLikelihoodObjective::calculate_log_likelihood(const Eigen::MatrixXd& simulated_incidence,
-        const Eigen::MatrixXd& observed_incidence) {
+        const Eigen::MatrixXd& observed_incidence) const {
             if(simulated_incidence.rows() != observed_incidence.rows() || simulated_incidence.cols() != observed_incidence.cols()) {
                 THROW_INVALID_PARAM("PoissonLikelihoodObjective::calculate_log_likelihood", "Simulated and observed incidence matrices must have the same dimensions.");
             }

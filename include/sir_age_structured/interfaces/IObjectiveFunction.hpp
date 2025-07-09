@@ -21,7 +21,7 @@ public:
      * @return double The calculated objective score. Higher values are typically better.
      *         Returns -infinity or NaN on calculation failure.
      */
-    virtual double calculate(const Eigen::VectorXd& parameters) = 0;
+    virtual double calculate(const Eigen::VectorXd& parameters) const = 0;
 
     /**
      * @brief Get the names of the parameters expected by this objective function.

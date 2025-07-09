@@ -1,15 +1,18 @@
 #include "model/SEPAIHRDModelCalibration.hpp"
 #include "model/parameters/SEPAIHRDParameterManager.hpp"
 #include "model/objectives/SEPAIHRDObjectiveFunction.hpp"
+#include "model/objectives/SEPAIHRDGradientObjectiveFunction.hpp"
+#include "model/optimizers/NUTSSampler.hpp"
 #include "exceptions/Exceptions.hpp"
 #include <iostream>
+#include <iomanip>
 #include <utility>
 
 namespace epidemic {
 
 SEPAIHRDModelCalibration::SEPAIHRDModelCalibration(
     std::shared_ptr<AgeSEPAIHRDModel> model_ptr,
-    const epidemic::CalibrationData& calibration_data,  // Note the :: prefix
+    const epidemic::CalibrationData& calibration_data,
     const std::vector<double>& time_points,
     const std::vector<std::string>& params_to_calibrate,
     const std::map<std::string, double>& proposal_sigmas,
@@ -62,6 +65,15 @@ ModelCalibrator SEPAIHRDModelCalibration::setupCalibrator(
     std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> algorithms)
 {
 
+    // Check if any algorithm requires gradients
+    bool needs_gradient = false;
+    for (const auto& [name, algo] : algorithms) {
+        if (dynamic_cast<NUTSSampler*>(algo.get())) {
+            needs_gradient = true;
+            break;
+        }
+    }
+
     std::unique_ptr<SEPAIHRDParameterManager> parameterManager;
     try {
         parameterManager = std::make_unique<SEPAIHRDParameterManager>(
@@ -71,20 +83,30 @@ ModelCalibrator SEPAIHRDModelCalibration::setupCalibrator(
                                          std::string("Failed to create SEPAIHRDParameterManager: ") + e.what());
     }
 
-    std::unique_ptr<SEPAIHRDObjectiveFunction> objectiveFunction;
+    std::unique_ptr<IObjectiveFunction> objectiveFunction;
      try {
-        objectiveFunction = std::make_unique<SEPAIHRDObjectiveFunction>(
-            model_,
-            *parameterManager,
-            *cache_,
-            observed_data_,
-            time_points_,
-            initial_state_cached_,
-            solver_strategy_
-            );
+        if (needs_gradient) {
+            objectiveFunction = std::make_unique<SEPAIHRDGradientObjectiveFunction>(
+                model_,
+                *parameterManager,
+                *cache_,
+                observed_data_,
+                time_points_,
+                initial_state_cached_,
+                solver_strategy_);
+        } else {
+            objectiveFunction = std::make_unique<SEPAIHRDObjectiveFunction>(
+                model_,
+                *parameterManager,
+                *cache_,
+                observed_data_,
+                time_points_,
+                initial_state_cached_,
+                solver_strategy_);
+        }
     } catch (const std::exception& e) {
         throw ModelConstructionException("SEPAIHRDModelCalibration::setupCalibrator",
-                                         std::string("Failed to create SEPAIHRDObjectiveFunction: ") + e.what());
+                                         std::string("Failed to create ObjectiveFunction: ") + e.what());
     }
 
     try {
@@ -164,6 +186,36 @@ ModelCalibrator SEPAIHRDModelCalibration::runPSOMCMC(
 
     std::cout << "--- Starting Calibration ---" << std::endl;
     calibrator.calibrate(phase1_settings, phase2_settings);
+    std::cout << "--- Calibration Finished ---" << std::endl;
+
+    try {
+         const auto& best_params_vec = calibrator.getBestParameterVector();
+         std::cout << std::setprecision(6);
+         std::cout << "Best parameters vector found: [" << best_params_vec.transpose() << "]" << std::endl;
+         std::cout << "Best objective function value: " << calibrator.getBestObjectiveValue() << std::endl;
+    } catch (const std::exception& e) {
+         std::cerr << "Error accessing calibration results: " << e.what() << std::endl;
+    }
+    return calibrator;
+}
+
+ModelCalibrator SEPAIHRDModelCalibration::runNUTS(
+    const std::map<std::string, double>& nuts_settings)
+{
+    std::cout << "\n=== Setting up SEPAIHRD Calibration (NUTS Sampler) ===" << std::endl;
+
+    auto nuts_sampler = std::make_unique<NUTSSampler>();
+
+    std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> optimization_algorithms;
+    // NUTS is a sampler, so it's conceptually a "Phase 2" algorithm like MCMC.
+    // We'll run it as the only phase.
+    optimization_algorithms[ModelCalibrator::PHASE2_NAME] = std::move(nuts_sampler);
+
+    ModelCalibrator calibrator = setupCalibrator(std::move(optimization_algorithms));
+
+    std::cout << "--- Starting Calibration ---" << std::endl;
+    // Pass empty settings for phase 1, and nuts_settings for phase 2.
+    calibrator.calibrate({}, nuts_settings);
     std::cout << "--- Calibration Finished ---" << std::endl;
 
     try {

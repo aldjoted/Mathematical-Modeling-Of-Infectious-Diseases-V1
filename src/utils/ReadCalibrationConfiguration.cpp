@@ -406,3 +406,7 @@ std::map<std::string, double> readHillClimbingSettings(const std::string &filena
 std::map<std::string, double> readParticleSwarmSettings(const std::string &filename) {
     return readSettingsFile(filename, "readParticleSwarmSettings");
 }
+
+std::map<std::string, double> readNUTSSettings(const std::string &filename) {
+    return readSettingsFile(filename, "readNUTSSettings");
+}

@@ -74,6 +74,7 @@
         "any": "cpp",
         "list": "cpp",
         "dense": "cpp",
-        "future": "cpp"
+        "future": "cpp",
+        "valarray": "cpp"
     }
 }

@@ -127,4 +127,11 @@ std::map<std::string, double> readHillClimbingSettings(const std::string &filena
  */
 std::map<std::string, double> readParticleSwarmSettings(const std::string &filename);
 
+/**
+ * @brief Read NUTS sampler settings from a configuration file
+ * @param filepath Path to the NUTS settings file
+ * @return Map of setting names to values
+ */
+std::map<std::string, double> readNUTSSettings(const std::string &filename);
+
 #endif // READCALIBRATIONCONFIGURATION_HPP

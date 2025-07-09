@@ -25,6 +25,8 @@
 #include "sir_age_structured/SimulationResultProcessor.hpp"
 #include "sir_age_structured/caching/SimulationCache.hpp"
 #include "model/PostCalibrationAnalyser.hpp"
+#include "model/optimizers/NUTSSampler.hpp"
+#include "model/objectives/SEPAIHRDGradientObjectiveFunction.hpp"
 
 // Utility includes
 #include "utils/FileUtils.hpp"
@@ -44,12 +46,15 @@ void printUsage(const char* programName) {
     cout << "  --algorithm, -a <algorithm>  Choose calibration algorithm:" << endl;
     cout << "                              'pso' or 'psomcmc' for PSO + MCMC (default)" << endl;
     cout << "                              'hill' or 'hillmcmc' for Hill Climbing + MCMC" << endl;
+    cout << "                              'nuts' for No-U-Turn Sampler" << endl;
     cout << "  --help, -h                  Show this help message" << endl;
 }
 
+
 enum class CalibrationAlgorithm {
     PSO_MCMC,
-    HILL_MCMC
+    HILL_MCMC,
+    NUTS
 };
 
 CalibrationAlgorithm parseAlgorithm(const string& algorithm) {
@@ -60,9 +65,11 @@ CalibrationAlgorithm parseAlgorithm(const string& algorithm) {
         return CalibrationAlgorithm::PSO_MCMC;
     } else if (algo_lower == "hill" || algo_lower == "hillmcmc") {
         return CalibrationAlgorithm::HILL_MCMC;
+    } else if (algo_lower == "nuts") {
+        return CalibrationAlgorithm::NUTS;
     } else {
         throw invalid_argument("Unknown algorithm: " + algorithm + 
-                             ". Valid options are: pso, psomcmc, hill, hillmcmc");
+                             ". Valid options are: pso, psomcmc, hill, hillmcmc, nuts");
     }
 }
 
@@ -153,8 +160,18 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    string algorithm_name = (selected_algorithm == CalibrationAlgorithm::PSO_MCMC) ? 
-                          "PSO + MCMC" : "Hill Climbing + MCMC";
+    string algorithm_name;
+    switch (selected_algorithm) {
+        case CalibrationAlgorithm::PSO_MCMC:
+            algorithm_name = "PSO + MCMC";
+            break;
+        case CalibrationAlgorithm::HILL_MCMC:
+            algorithm_name = "Hill Climbing + MCMC";
+            break;
+        case CalibrationAlgorithm::NUTS:
+            algorithm_name = "NUTS (No-U-Turn Sampler)";
+            break;
+    }
     
     // === LOGGER SETUP ===
     Logger::getInstance().setLogLevel(LogLevel::INFO);
@@ -177,6 +194,7 @@ int main(int argc, char* argv[]) {
         const string pso_settings_file = FileUtils::joinPaths(project_root, "data/configuration/pso_settings.txt");
         const string mcmc_settings_file = FileUtils::joinPaths(project_root, "data/configuration/mcmc_settings.txt");
         const string hill_climbing_settings_file = FileUtils::joinPaths(project_root, "data/configuration/hill_climbing_settings.txt");
+        const string nuts_settings_file = FileUtils::joinPaths(project_root, "data/configuration/nuts_settings.txt");
         const string contact_matrix_path = FileUtils::joinPaths(project_root, "data/contacts.csv");
         const string output_dir = FileUtils::joinPaths(project_root, "data/output");
         
@@ -287,6 +305,8 @@ int main(int argc, char* argv[]) {
         std::map<std::string, double> pso_settings = readParticleSwarmSettings(pso_settings_file);
         std::map<std::string, double> mcmc_settings = readMetropolisHastingsSettings(mcmc_settings_file);
         std::map<std::string, double> hill_climbing_settings = readHillClimbingSettings(hill_climbing_settings_file);
+        std::map<std::string, double> nuts_settings = readNUTSSettings(nuts_settings_file);
+
 
         // === RUN CALIBRATION ===
         Logger::getInstance().info("main", "Starting calibration with " + algorithm_name + "...");
@@ -301,6 +321,10 @@ int main(int argc, char* argv[]) {
                     case CalibrationAlgorithm::HILL_MCMC:
                         Logger::getInstance().info("main", "Running Hill Climbing + MCMC calibration...");
                         return calibration_setup.runHillClimbingMCMC(hill_climbing_settings, mcmc_settings);
+                        
+                    case CalibrationAlgorithm::NUTS:
+                        Logger::getInstance().info("main", "Running NUTS calibration...");
+                        return calibration_setup.runNUTS(nuts_settings);
                         
                     default:
                         throw std::runtime_error("Unknown calibration algorithm");

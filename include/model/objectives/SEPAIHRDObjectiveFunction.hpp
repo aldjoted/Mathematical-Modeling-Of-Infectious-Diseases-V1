@@ -29,7 +29,7 @@ namespace epidemic {
      * - ε is a small constant to avoid log(0)
      *
      */
-    class SEPAIHRDObjectiveFunction : public IObjectiveFunction {
+    class SEPAIHRDObjectiveFunction : public virtual IObjectiveFunction {
     public:
         /**
          * @brief Constructor.
@@ -59,7 +59,7 @@ namespace epidemic {
          * @param parameters A vector of model parameters to be calibrated.
          * @return The total Poisson log-likelihood.
          */
-        double calculate(const Eigen::VectorXd& parameters) override;
+        double calculate(const Eigen::VectorXd& parameters) const override;
     
         /**
          * @brief Returns the names of the parameters used in the calibration.
@@ -81,11 +81,12 @@ namespace epidemic {
                                             const Eigen::MatrixXd& observed,
                                             const std::string& dataTypeForLog) const;
 
+        /** @brief Reference to the manager for model parameters. */
+        IParameterManager& parameterManager_;
+
     private:
         /** @brief Shared pointer to the epidemiological model. */
         std::shared_ptr<AgeSEPAIHRDModel> model_;
-        /** @brief Reference to the manager for model parameters. */
-        IParameterManager& parameterManager_;
         /** @brief Reference to the cache for simulation results and likelihoods. */
         ISimulationCache& cache_;
         /** @brief Reference to the observed calibration data. */
@@ -103,7 +104,7 @@ namespace epidemic {
     
         // Internal simulator instance
         /** @brief Unique pointer to the internal ODE simulator instance. */
-        std::unique_ptr<AgeSEPAIHRDSimulator> simulator_;
+        mutable std::unique_ptr<AgeSEPAIHRDSimulator> simulator_;
 
         // For Suggestion 1: Cache-Aware Computation (intermediate simulation results)
         /** @brief Structure to cache intermediate simulation results (I, H, D compartments) and associated parameters. */
@@ -149,14 +150,14 @@ namespace epidemic {
         mutable Eigen::MatrixXd simulated_deaths_;
 
         /** @brief Preallocates internal matrices based on model and time points. */
-        void preallocateInternalMatrices();
+        void preallocateInternalMatrices() const;
     
         /**
          * @brief Ensures that the internal simulator instance exists. Creates it if necessary.
          *
          * @throws SimulationException if the simulator creation fails.
          */
-        void ensureSimulatorExists();
+        void ensureSimulatorExists() const;
 
     };
     

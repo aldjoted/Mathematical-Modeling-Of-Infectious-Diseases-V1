@@ -82,6 +82,13 @@ public:
         const std::map<std::string, double>& phase1_settings,
         const std::map<std::string, double>& phase2_settings);
 
+    /**
+     * @brief Runs calibration using the NUTS sampler.
+     * @param nuts_settings Configuration settings for NUTS.
+     * @return ModelCalibrator The calibrator instance containing results after execution.
+     */
+    ModelCalibrator runNUTS(const std::map<std::string, double>& nuts_settings);
+
 private:
     /** @brief Shared pointer to the AgeSEPAIHRDModel instance. */
     std::shared_ptr<AgeSEPAIHRDModel> model_;

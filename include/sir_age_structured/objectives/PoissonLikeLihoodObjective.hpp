@@ -69,7 +69,7 @@ namespace epidemic {
              * @throws ModelException If the model provides inconsistent information (e.g., non-positive age classes/state size, state size not divisible by age classes).
              * @throws std::exception For other potential errors during simulation or calculation.
              */
-            double calculate(const Eigen::VectorXd& parameters) override;
+             double calculate(const Eigen::VectorXd& parameters) const override;
 
             /**
              * @brief Gets the names of the parameters managed by the associated IParameterManager.
@@ -112,7 +112,7 @@ namespace epidemic {
              * @throws InvalidParameterException If the dimensions of simulated_incidence and observed_incidence do not match, or if either matrix is empty.
              */
             double calculate_log_likelihood(const Eigen::MatrixXd& simulated_incidence,
-                const Eigen::MatrixXd& observed_incidence);
+                const Eigen::MatrixXd& observed_incidence) const;
 
             };
 
