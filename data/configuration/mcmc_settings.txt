@@ -3,9 +3,9 @@
 
 # --- Core MCMC Settings ---
 burn_in 5
-mcmc_iterations 2500
-thinning 10
-report_interval 100
+mcmc_iterations 250
+thinning 1
+report_interval 10
 calculate_posterior_mean 1.0
 
 # --- Performance & Parallelization Settings ---
@@ -19,8 +19,8 @@ mcmc_enable_refinement 1.0
 mcmc_refinement_steps 5
 
 # --- Adaptive Sampling Settings ---
-mcmc_adaptive_step 0.05
+mcmc_adaptive_step 0
 mcmc_target_acceptance 0.44
-mcmc_adaptation_rate 0.05
+mcmc_adaptation_rate 0.01
 
 # --- END OF FILE mcmc_settings.txt ---

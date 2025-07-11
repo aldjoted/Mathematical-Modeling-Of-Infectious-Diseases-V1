@@ -1,8 +1,22 @@
+# --- START OF FILE proposal_sigmas.txt ---
+
 # Proposal Sigmas for MCMC calibration
 
-beta 0.02
+# Time-varying Beta Sigmas
+beta_1 0.03
+beta_2 0.03
+beta_3 0.03
+beta_4 0.03
+beta_5 0.03
+beta_6 0.03
+beta_7 0.03
+
+# Other transmission parameters
+# Placeholder
+beta 0.02 
 theta 0.05
 
+# Progression rates
 sigma 0.02
 gamma_p 0.05
 gamma_A 0.01
@@ -10,6 +24,7 @@ gamma_I 0.01
 gamma_H 0.01
 gamma_ICU 0.005
 
+# Age-specific fractions/rates
 p_0 0.05
 p_1 0.05
 p_2 0.04
@@ -35,15 +50,15 @@ d_ICU_1 0.03
 d_ICU_2 0.04
 d_ICU_3 0.04
 
+# NPI Kappas
 kappa_2 0.02
 kappa_3 0.04
 kappa_4 0.05
 kappa_5 0.05
 kappa_6 0.08
 kappa_7 0.05
-#kappa_8 0.06
 
-# --- Initial State Multipliers ---
+# Initial State Multipliers
 E0_multiplier   0.5
 P0_multiplier   0.5
 A0_multiplier   0.5
@@ -53,6 +68,7 @@ ICU0_multiplier 0.5
 R0_multiplier   0.5
 D0_multiplier   0.5
 
+# Susceptibility / Infectiousness
 a_0      0.01
 a_1      0.01
 a_2      0.01

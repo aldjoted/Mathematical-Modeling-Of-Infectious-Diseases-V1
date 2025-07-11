@@ -9,30 +9,53 @@
 #include <numeric>
 #include <algorithm>
 #include <iostream>
+#include "model/PieceWiseConstantNPIStrategy.hpp"
 
 namespace epidemic {
 
     AgeSEPAIHRDModel::AgeSEPAIHRDModel(const SEPAIHRDParameters& params, std::shared_ptr<INpiStrategy> npi_strategy_ptr)
         : num_age_classes(params.N.size()), N(params.N), M_baseline(params.M_baseline),
-          beta(params.beta), a(params.a), h_infec(params.h_infec), theta(params.theta),
+          beta(params.beta), beta_end_times_(params.beta_end_times), beta_values_(params.beta_values), a(params.a), h_infec(params.h_infec), theta(params.theta),
           sigma(params.sigma), gamma_p(params.gamma_p), gamma_A(params.gamma_A), gamma_I(params.gamma_I),
           gamma_H(params.gamma_H), gamma_ICU(params.gamma_ICU), p(params.p), h(params.h), icu(params.icu),
           d_H(params.d_H), d_ICU(params.d_ICU),
           npi_strategy(npi_strategy_ptr), baseline_beta(params.beta), baseline_theta(params.theta), E0_multiplier(params.E0_multiplier), P0_multiplier(params.P0_multiplier), A0_multiplier(params.A0_multiplier), I0_multiplier(params.I0_multiplier), H0_multiplier(params.H0_multiplier), ICU0_multiplier(params.ICU0_multiplier), R0_multiplier(params.R0_multiplier), D0_multiplier(params.D0_multiplier) {
     
         if (!params.validate()) {
-            THROW_INVALID_PARAM("AgeSEPAIHRDModel", "Invalid SEPAIHRD parameters dimensions or sizes.");
+            THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor", "Invalid SEPAIHRD parameters dimensions or sizes.");
         }
         if (!npi_strategy) {
-             THROW_INVALID_PARAM("AgeSEPAIHRDModel", "NPI strategy pointer cannot be null.");
+             THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor", "NPI strategy pointer cannot be null.");
         }
         if (beta < 0 || theta < 0 || sigma < 0 || gamma_p < 0 || gamma_A < 0 || gamma_I < 0 || gamma_H < 0 || gamma_ICU < 0) {
-             THROW_INVALID_PARAM("AgeSEPAIHRDModel", "Rate parameters cannot be negative.");
+             THROW_INVALID_PARAM("AgeSEPAIHRDModel:::constructor", "Rate parameters cannot be negative.");
         }
         if ((p.array() < 0).any() || (p.array() > 1).any() ||
             (h.array() < 0).any() || (icu.array() < 0).any() ||
             (d_H.array() < 0).any() || (d_ICU.array() < 0).any()) {
-             THROW_INVALID_PARAM("AgeSEPAIHRDModel", "Age-specific rate/probability parameters cannot be negative (p must be <= 1).");
+             THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor", "Age-specific rate/probability parameters cannot be negative (p must be <= 1).");
+        }
+
+        if (!beta_values_.empty()) {
+            if (beta_values_.size() != beta_end_times_.size()) {
+                THROW_INVALID_PARAM("AgeSEPAIHRDModel::ctor", "Beta values and end times must have the same size.");
+            }
+
+            double beta_baseline_end_time = 0.0;
+            auto* piecewise_npi_strategy = dynamic_cast<PiecewiseConstantNpiStrategy*>(npi_strategy.get());
+            if (piecewise_npi_strategy) {
+                if (!beta_end_times_.empty()){
+                    beta_baseline_end_time = beta_end_times_.front();
+                }
+            }
+
+            beta_strategy_ = std::make_unique<PiecewiseConstantParameterStrategy>(
+                "beta",
+                std::vector<double>(beta_end_times_.begin() + 1, beta_end_times_.end()),
+                std::vector<double>(beta_values_.begin() + 1, beta_values_.end()),
+                beta_values_.front(),
+                beta_baseline_end_time
+            );
         }
     }
     
@@ -69,9 +92,10 @@ namespace epidemic {
             }
         }    
         // 2. Get the NPI-adjusted contact rates.
+        double current_beta = computeBeta(time);
         Eigen::MatrixXd effective_contact_matrix = current_reduction_factor * M_baseline;
         // 3. Calculate the force of infection (lambda) for each age group.
-        Eigen::VectorXd lambda = beta * a.array() * (effective_contact_matrix * infectious_pressure).array();
+        Eigen::VectorXd lambda = current_beta * a.array() * (effective_contact_matrix * infectious_pressure).array();
         lambda = lambda.cwiseMax(0.0);
     
         Eigen::VectorXd dS = -lambda.array() * S.array();
@@ -105,6 +129,8 @@ namespace epidemic {
             double transmission_reduction = params(0);
             if (transmission_reduction < 0.0 || transmission_reduction > 1.0) THROW_INVALID_PARAM("applyIntervention", "Transmission reduction must be between 0 and 1.");
             beta = baseline_beta * (1.0 - transmission_reduction);
+            // This intervention overrides any time-varying beta schedule.
+            beta_strategy_.reset(); 
             std::cout << "Applied intervention '" << name << "' reducing beta by " << transmission_reduction*100 << "%"
                       << " (new beta = " << beta << ")" << std::endl;
         }
@@ -125,11 +151,11 @@ namespace epidemic {
         std::lock_guard<std::mutex> lock(mutex_);
         beta = baseline_beta;
         theta = baseline_theta;
+        beta_strategy_.reset(); // Also reset the beta strategy
         std::cout << "SEPAIHRD model intervention parameters reset to baseline (beta=" << beta << ", theta=" << theta << ")." << std::endl;
     }
     
     int AgeSEPAIHRDModel::getStateSize() const {
-        // num_age_classes is effectively constant after construction.
         return 9 * num_age_classes;
     }
     
@@ -172,6 +198,7 @@ namespace epidemic {
         std::lock_guard<std::mutex> lock(mutex_);
         if (new_beta < 0.0) THROW_INVALID_PARAM("setTransmissionRate", "Transmission rate cannot be negative.");
         beta = new_beta;
+        beta_strategy_.reset();
     }
 
     void AgeSEPAIHRDModel::setSusceptibility(const Eigen::VectorXd& new_a) {
@@ -198,7 +225,7 @@ namespace epidemic {
     }
 
     SEPAIHRDParameters AgeSEPAIHRDModel::getModelParameters() const {
-        std::lock_guard<std::mutex> lock(mutex_); // Lock here as we are reading many members
+        std::lock_guard<std::mutex> lock(mutex_);
         SEPAIHRDParameters params;
         params.N = N;
         params.M_baseline = M_baseline;
@@ -206,6 +233,8 @@ namespace epidemic {
         params.a = a;
         params.h_infec = h_infec;
         params.beta = beta;
+        params.beta_end_times = beta_end_times_;
+        params.beta_values = beta_values_;
         params.theta = theta;
         params.sigma = sigma;
         params.gamma_p = gamma_p;
@@ -264,7 +293,6 @@ namespace epidemic {
             THROW_INVALID_PARAM("setModelParameters", "SEPAIHRDParameters object failed its own validation.");
         }
 
-
         N = params.N;
         M_baseline = params.M_baseline;
         a = params.a;
@@ -290,12 +318,46 @@ namespace epidemic {
         icu = params.icu;
         d_H = params.d_H;
         d_ICU = params.d_ICU;
+        
+        // Update baselines for reset()
         baseline_beta = params.beta;
         baseline_theta = params.theta;
+        beta_end_times_ = params.beta_end_times;
+        beta_values_ = params.beta_values;
+
+        if (!beta_values_.empty()) {
+            if (beta_values_.size() != beta_end_times_.size()) {
+                THROW_INVALID_PARAM("setModelParameters", "beta_end_times and beta_values must have the same size.");
+            }
+             if (beta_values_.empty()){
+                beta_strategy_.reset();
+            } else {
+                double beta_baseline_end_time = beta_end_times_.front();
+                double beta_baseline_value = beta_values_.front();
+                std::vector<double> subsequent_end_times(beta_end_times_.begin() + 1, beta_end_times_.end());
+                std::vector<double> subsequent_values(beta_values_.begin() + 1, beta_values_.end());
+                beta_strategy_ = std::make_unique<PiecewiseConstantParameterStrategy>(
+                    "beta",
+                    subsequent_end_times,
+                    subsequent_values,
+                    beta_baseline_value,
+                    beta_baseline_end_time
+                );
+            }
+        } else {
+            beta_strategy_.reset();
+        }
     }
 
     bool AgeSEPAIHRDModel::areInitialDeathsZero() const {
         return true;
+    }
+
+    double AgeSEPAIHRDModel::computeBeta(double time) const {
+        if (beta_strategy_) {
+            return beta_strategy_->getValue(time);
+        }
+        return beta;
     }
     
 }

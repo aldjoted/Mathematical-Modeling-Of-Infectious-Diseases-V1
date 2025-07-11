@@ -1,10 +1,19 @@
+# --- START OF FILE param_bounds.txt ---
+
 # Parameter bounds for SEPAIHRD model calibration (Spain 2020)
 # Format: parameter_name lower_bound upper_bound
 
+# --- Time-varying Beta Parameters ---
+beta_1  0.1   1.0
+beta_2  0.1   1.0
+beta_3  0.1   1.0
+beta_4  0.1   1.0
+beta_5  0.1   1.0
+beta_6  0.1   1.0
+beta_7  0.1   1.0
+
 # --- Transmission Parameters ---
-# Baseline transmission rate
-beta    0.20   0.6
- # Relative transmissibility of symptomatic cases   
+# beta    0.20   0.6 # Placeholder
 theta   0.2    1.0  
 
 # --- Disease Progression Rates (inverse durations in days) ---
@@ -54,20 +63,12 @@ d_ICU_3 0.07   0.60
 
 # --- NPI Scaling Factors (kappa_period_X) ---
 # kappa_1 is fixed at 1.0 (baseline)
-# Strict Lockdown
 kappa_2 0.5   1.2
-# De-escalation Phase 1   
 kappa_3 0.25   1.1
-# De-escalation Phase 2   
 kappa_4 0.25   1.0 
-# Summer / "New Normality"
 kappa_5 0.6   1.3
-# Autumn Resurgence   
 kappa_6 1.0   1.5
-# Second State of Alarm  
 kappa_7 0.7  1.8
-# End of Year   
-#kappa_8 0.7   2.0   
 
 # --- Initial State Multipliers ---
 E0_multiplier   0.1   20.0
@@ -79,6 +80,7 @@ ICU0_multiplier 0.1   20.0
 R0_multiplier   0.1   20.0
 D0_multiplier   0.1   20.0
 
+# --- Susceptibility / Infectiousness ---
 a_0      0.1          1.0
 a_1      0.1          1.0
 a_2      0.1          1.0
@@ -86,4 +88,4 @@ a_3      0.1          1.0
 h_infec_0      0.1          1.0
 h_infec_1      0.1          1.0
 h_infec_2      0.1          1.0
-h_infec_3      0.1          1
+h_infec_3      0.1          1.0

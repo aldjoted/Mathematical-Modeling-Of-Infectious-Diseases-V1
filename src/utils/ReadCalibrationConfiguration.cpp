@@ -13,11 +13,45 @@
 #include "exceptions/Exceptions.hpp"
 #include "model/parameters/SEPAIHRDParameters.hpp"
 
+static void parseValue(std::istringstream& iss, double& scalar_val, std::vector<double>& vector_val, bool& is_vector) {
+    vector_val.clear();
+    double value;
+    is_vector = false;
+    if (!(iss >> value)) return;
+    vector_val.push_back(value);
+    while (iss >> value) {
+        is_vector = true;
+        vector_val.push_back(value);
+    }
+    if (!is_vector) {
+        scalar_val = vector_val[0];
+    }
+}
+
+static void assignAgeVector(const std::string& name, const std::vector<double>& values, epidemic::SEPAIHRDParameters& params, int num_age_classes) {
+    if (static_cast<int>(values.size()) != num_age_classes) {
+        throw epidemic::DataFormatException("readSEPAIHRDParameters", "Incorrect number of values for " + name + ". Expected " + std::to_string(num_age_classes) + ", got " + std::to_string(values.size()));
+    }
+    
+    Eigen::VectorXd vec = Eigen::Map<const Eigen::Vector<double, Eigen::Dynamic>>(values.data(), values.size());
+
+    if      (name == "a") params.a = vec;
+    else if (name == "h_infec") params.h_infec = vec;
+    else if (name == "p") params.p = vec;
+    else if (name == "h") params.h = vec;
+    else if (name == "icu") params.icu = vec;
+    else if (name == "d_H") params.d_H = vec;
+    else if (name == "d_ICU") params.d_ICU = vec;
+}
+
+
+// --- Main Functions ---
+
 void saveCalibrationResults(const std::string &filename,
-                          const epidemic::SEPAIHRDParameters &parameters,
+                          const epidemic::SEPAIHRDParameters& meters,
                           const std::vector<std::string>& actual_calibrated_param_names,
                           double obj_value,
-                          const std::string &timestamp_str) {
+                          const std::string& tamp_str) {
 
     std::ofstream file(filename);
     if (!file.is_open()) {
@@ -25,7 +59,7 @@ void saveCalibrationResults(const std::string &filename,
         throw epidemic::FileIOException("saveCalibrationResults", "Unable to open file for writing: " + filename);
     }
 
-    std::string ts = timestamp_str;
+    std::string ts = tamp_str;
     if (ts.empty()) {
         std::time_t now = std::time(nullptr);
         char mbstr[100];
@@ -42,71 +76,79 @@ void saveCalibrationResults(const std::string &filename,
     file << "# Calibrated parameters are marked with [C] if they were part of the calibration set." << std::endl;
     file << std::endl;
 
-    file << "# Scalar parameters" << std::endl;
-
+    file << "# --- Transmission Parameters ---" << std::endl;
     auto writeScalarParam = [&](const std::string& name, double value) {
         bool calibrated = std::find(actual_calibrated_param_names.begin(), actual_calibrated_param_names.end(), name) != actual_calibrated_param_names.end();
-        file << name << " " << std::scientific << std::setprecision(6) << value;
+        file << name << " " << std::scientific << std::setprecision(8) << value;
         if (calibrated) file << " # [C]";
         file << std::endl;
     };
-
-    writeScalarParam("beta", parameters.beta);
-    writeScalarParam("theta", parameters.theta);
-    writeScalarParam("sigma", parameters.sigma);
-    writeScalarParam("gamma_p", parameters.gamma_p);
-    writeScalarParam("gamma_A", parameters.gamma_A);
-    writeScalarParam("gamma_I", parameters.gamma_I);
-    writeScalarParam("gamma_H", parameters.gamma_H);
-    writeScalarParam("gamma_ICU", parameters.gamma_ICU);
-    writeScalarParam("contact_matrix_scaling_factor", parameters.contact_matrix_scaling_factor);
-
-    file << std::endl << "# Age-specific parameters" << std::endl;
-
-    auto writeAgeVectorParam = [&](const std::string& base_name, const Eigen::VectorXd& values) {
-        for (int i = 0; i < values.size(); ++i) {
-            std::string full_param_name = base_name + "_" + std::to_string(i);
-            bool calibrated = std::find(actual_calibrated_param_names.begin(), actual_calibrated_param_names.end(), full_param_name) != actual_calibrated_param_names.end();
-            file << full_param_name << " " << std::scientific << std::setprecision(6) << values(i);
-            if (calibrated) file << " # [C]";
-            file << std::endl;
-        }
-    };
-
-    writeAgeVectorParam("p", parameters.p);
-    writeAgeVectorParam("a", parameters.a);
-    writeAgeVectorParam("h_infec", parameters.h_infec);
-    writeAgeVectorParam("h", parameters.h);
-    writeAgeVectorParam("icu", parameters.icu);
-    writeAgeVectorParam("d_H", parameters.d_H);
-    writeAgeVectorParam("d_ICU", parameters.d_ICU);
-
-    file << std::endl << "# Initial State Multipliers" << std::endl;
-    writeScalarParam("E0_multiplier", parameters.E0_multiplier);
-    writeScalarParam("P0_multiplier", parameters.P0_multiplier);
-    writeScalarParam("A0_multiplier", parameters.A0_multiplier);
-    writeScalarParam("I0_multiplier", parameters.I0_multiplier);
-    writeScalarParam("H0_multiplier", parameters.H0_multiplier);
-    writeScalarParam("ICU0_multiplier", parameters.ICU0_multiplier);
-    writeScalarParam("R0_multiplier", parameters.R0_multiplier);
-    writeScalarParam("D0_multiplier", parameters.D0_multiplier);
-
-    file << std::endl << "# NPI strategy parameters" << std::endl;
-
-    file << "kappa_end_times";
-    for (size_t i = 0; i < parameters.kappa_end_times.size(); ++i) {
-        file << " " << std::fixed << std::setprecision(1) << parameters.kappa_end_times[i];
-    }
+    
+    // Write out the time-varying beta schedule
+    file << "beta_end_times";
+    for (double t : meters.beta_end_times) file << " " << std::fixed << std::setprecision(1) << t;
     file << std::endl;
 
-    if (parameters.kappa_values.size() >= 1) {
-        for (size_t i = 0; i < parameters.kappa_values.size(); ++i) {
-            std::string kappa_name = "kappa_" + std::to_string(i + 1);
-            bool calibrated = std::find(actual_calibrated_param_names.begin(), actual_calibrated_param_names.end(), kappa_name) != actual_calibrated_param_names.end();
-            file << kappa_name << " " << std::scientific << std::setprecision(6) << parameters.kappa_values[i];
-            if (calibrated) file << " # [C]";
-            file << std::endl;
+    for (size_t i = 0; i < meters.beta_values.size(); ++i) {
+        std::string beta_name = "beta_" + std::to_string(i + 1);
+        writeScalarParam(beta_name, meters.beta_values[i]);
+    }
+    
+    writeScalarParam("beta", meters.beta); // Also write the constant beta for reference
+    writeScalarParam("theta", meters.theta);
+
+    file << std::endl << "# --- Disease Progression Rates ---" << std::endl;
+    writeScalarParam("sigma", meters.sigma);
+    writeScalarParam("gamma_p", meters.gamma_p);
+    writeScalarParam("gamma_A", meters.gamma_A);
+    writeScalarParam("gamma_I", meters.gamma_I);
+    writeScalarParam("gamma_H", meters.gamma_H);
+    writeScalarParam("gamma_ICU", meters.gamma_ICU);
+    
+    file << std::endl << "# --- Age-specific Parameters ---" << std::endl;
+    auto writeAgeVectorParam = [&](const std::string& base_name, const Eigen::VectorXd& values) {
+        file << base_name;
+        for (int i = 0; i < values.size(); ++i) {
+            file << " " << std::scientific << std::setprecision(8) << values(i);
         }
+        // Check if any of the vector elements were calibrated
+        bool any_calibrated = false;
+        for (int i = 0; i < values.size(); ++i) {
+             if (std::find(actual_calibrated_param_names.begin(), actual_calibrated_param_names.end(), base_name + "_" + std::to_string(i)) != actual_calibrated_param_names.end()) {
+                any_calibrated = true;
+                break;
+            }
+        }
+        if (any_calibrated) file << " # [C]";
+        file << std::endl;
+    };
+
+    writeAgeVectorParam("p", meters.p);
+    writeAgeVectorParam("a", meters.a);
+    writeAgeVectorParam("h_infec", meters.h_infec);
+    writeAgeVectorParam("h", meters.h);
+    writeAgeVectorParam("icu", meters.icu);
+    writeAgeVectorParam("d_H", meters.d_H);
+    writeAgeVectorParam("d_ICU", meters.d_ICU);
+
+    file << std::endl << "# --- Initial State Multipliers ---" << std::endl;
+    writeScalarParam("E0_multiplier", meters.E0_multiplier);
+    writeScalarParam("P0_multiplier", meters.P0_multiplier);
+    writeScalarParam("A0_multiplier", meters.A0_multiplier);
+    writeScalarParam("I0_multiplier", meters.I0_multiplier);
+    writeScalarParam("H0_multiplier", meters.H0_multiplier);
+    writeScalarParam("ICU0_multiplier", meters.ICU0_multiplier);
+    writeScalarParam("R0_multiplier", meters.R0_multiplier);
+    writeScalarParam("D0_multiplier", meters.D0_multiplier);
+
+    file << std::endl << "# --- NPI Strategy Parameters ---" << std::endl;
+    file << "kappa_end_times";
+    for (double t : meters.kappa_end_times) file << " " << std::fixed << std::setprecision(1) << t;
+    file << std::endl;
+
+    for (size_t i = 0; i < meters.kappa_values.size(); ++i) {
+        std::string kappa_name = "kappa_" + std::to_string(i + 1);
+        writeScalarParam(kappa_name, meters.kappa_values[i]);
     }
 
     file.close();
@@ -117,146 +159,104 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
     std::ifstream file(filename);
     if (!file.is_open()) {
         epidemic::Logger::getInstance().error("readSEPAIHRDParameters", "Unable to open parameters file: " + filename);
-        throw std::runtime_error("Unable to open parameters file: " + filename);
+        throw epidemic::FileIOException("readSEPAIHRDParameters", "Unable to open parameters file: " + filename);
     }
 
     epidemic::SEPAIHRDParameters params;
-
-    params.p = Eigen::VectorXd(num_age_classes);
-    params.a = Eigen::VectorXd(num_age_classes);
-    params.h_infec = Eigen::VectorXd(num_age_classes);
-    params.h = Eigen::VectorXd(num_age_classes);
-    params.icu = Eigen::VectorXd(num_age_classes);
-    params.d_H = Eigen::VectorXd(num_age_classes);
-    params.d_ICU = Eigen::VectorXd(num_age_classes);
-
-    params.N = Eigen::VectorXd::Zero(num_age_classes);
-    params.M_baseline = Eigen::MatrixXd::Zero(num_age_classes, num_age_classes);
+    // Pre-size age-specific vectors to avoid errors if not present in the file
+    params.a = Eigen::VectorXd::Zero(num_age_classes);
+    params.h_infec = Eigen::VectorXd::Zero(num_age_classes);
+    params.p = Eigen::VectorXd::Zero(num_age_classes);
+    params.h = Eigen::VectorXd::Zero(num_age_classes);
+    params.icu = Eigen::VectorXd::Zero(num_age_classes);
+    params.d_H = Eigen::VectorXd::Zero(num_age_classes);
+    params.d_ICU = Eigen::VectorXd::Zero(num_age_classes);
 
     std::string line;
     int line_number = 0;
-    std::vector<std::string> age_vector_params = {"p", "a", "h_infec", "h", "icu", "d_H", "d_ICU"};
+
+    std::map<int, double> temp_beta_map, temp_kappa_map;
 
     while (std::getline(file, line)) {
         line_number++;
 
         line.erase(0, line.find_first_not_of(" \t\n\r\f\v"));
         line.erase(line.find_last_not_of(" \t\n\r\f\v") + 1);
-
         if (line.empty() || line[0] == '#') continue;
 
         std::istringstream iss(line);
         std::string param_name;
         if (!(iss >> param_name)) {
-            epidemic::Logger::getInstance().error("readSEPAIHRDParameters", "Could not read parameter name on line " + std::to_string(line_number) + ": " + line);
+            epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Could not read parameter name on line " + std::to_string(line_number));
             continue;
         }
 
-        bool is_age_vector = false;
-        for(const auto& name : age_vector_params) {
-            if (param_name == name) {
-                is_age_vector = true;
-                break;
-            }
-        }
-        if (is_age_vector) {
-            Eigen::VectorXd* vec_ptr = nullptr;
-            if (param_name == "p") vec_ptr = &params.p;
-            else if (param_name == "a") vec_ptr = &params.a;
-            else if (param_name == "h_infec") vec_ptr = &params.h_infec;
-            else if (param_name == "h") vec_ptr = &params.h;
-            else if (param_name == "icu") vec_ptr = &params.icu;
-            else if (param_name == "d_H") vec_ptr = &params.d_H;
-            else if (param_name == "d_ICU") vec_ptr = &params.d_ICU;
-            else {
-                throw std::runtime_error("Internal error reading age vector on line " + std::to_string(line_number));
-            }
-            for (int i = 0; i < num_age_classes; ++i) {
-                double value;
-                if (!(iss >> value)) {
-                    throw std::runtime_error("Error reading value for age class " + std::to_string(i) +
-                                               " of parameter '" + param_name + "' on line " + std::to_string(line_number));
-                }
-                (*vec_ptr)(i) = value;
-            }
-            double extra;
-            if (iss >> extra) {
-                throw std::runtime_error("Too many values provided for age-specific parameter '" + param_name +
-                                           "' on line " + std::to_string(line_number) + ". Expected " + std::to_string(num_age_classes) + " values.");
-            }
-        } else if (param_name == "kappa_end_times") {
-            double value;
-            while (iss >> value) {
-                params.kappa_end_times.push_back(value);
-            }
-            if (params.kappa_end_times.empty()) {
-                throw std::runtime_error("No values provided for kappa_end_times on line " + std::to_string(line_number));
-            }
-        } else if (param_name == "kappa_values") {
-            double value;
-            while (iss >> value) {
-                params.kappa_values.push_back(value);
-            }
-            if (params.kappa_values.empty()) {
-                throw std::runtime_error("No values provided for kappa_values on line " + std::to_string(line_number));
-            }
-        } else {
+        double scalar_val = 0.0;
+        std::vector<double> vector_val;
+        bool is_vector = false;
+        parseValue(iss, scalar_val, vector_val, is_vector);
 
-            double value;
-            if (!(iss >> value)) {
-                throw std::runtime_error("Error reading scalar value for parameter '" + param_name +
-                                           "' on line " + std::to_string(line_number));
+        if (vector_val.empty()) {
+             epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "No value found for parameter '" + param_name + "' on line " + std::to_string(line_number));
+             continue;
+        }
+
+        if (param_name.rfind("beta_", 0) == 0 && param_name != "beta_end_times") {
+            try {
+                int idx = std::stoi(param_name.substr(5));
+                temp_beta_map[idx] = scalar_val;
+            } catch (const std::exception& e) {
+                epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", 
+                    "Could not parse beta index from parameter: " + param_name + " on line " + std::to_string(line_number));
             }
-            if (param_name == "beta") params.beta = value;
-            else if (param_name == "theta") params.theta = value;
-            else if (param_name == "sigma") params.sigma = value;
-            else if (param_name == "gamma_p") params.gamma_p = value;
-            else if (param_name == "gamma_A") params.gamma_A = value;
-            else if (param_name == "gamma_I") params.gamma_I = value;
-            else if (param_name == "gamma_H") params.gamma_H = value;
-            else if (param_name == "gamma_ICU") params.gamma_ICU = value;
-            else if (param_name == "contact_matrix_scaling_factor") params.contact_matrix_scaling_factor = value;
-            else if (param_name == "E0_multiplier") params.E0_multiplier = value;
-            else if (param_name == "P0_multiplier") params.P0_multiplier = value;
-            else if (param_name == "A0_multiplier") params.A0_multiplier = value;
-            else if (param_name == "I0_multiplier") params.I0_multiplier = value;
-            else if (param_name == "H0_multiplier") params.H0_multiplier = value;
-            else if (param_name == "ICU0_multiplier") params.ICU0_multiplier = value;
-            else if (param_name == "R0_multiplier") params.R0_multiplier = value;
-            else if (param_name == "D0_multiplier") params.D0_multiplier = value;
-            else if (param_name == "N") {
-                for (int i = 0; i < num_age_classes; ++i) {
-                    if (!(iss >> value)) {
-                        throw std::runtime_error("Error reading population value for age class " + std::to_string(i) +
-                                                   " on line " + std::to_string(line_number));
-                    }
-                    params.N(i) = value;
-                }
-                double extra;
-                if (iss >> extra) {
-                    throw std::runtime_error("Too many values provided for population vector 'N' on line " + std::to_string(line_number));
-                }
-            } else if (param_name == "M_baseline") {
-                for (int i = 0; i < num_age_classes; ++i) {
-                    for (int j = 0; j < num_age_classes; ++j) {
-                        if (!(iss >> value)) {
-                            throw std::runtime_error("Error reading contact matrix value at (" + std::to_string(i) + ", " + std::to_string(j) +
-                                                       ") on line " + std::to_string(line_number));
-                        }
-                        params.M_baseline(i, j) = value;
-                    }
-                }
-                double extra;
-                if (iss >> extra) {
-                    throw std::runtime_error("Too many values provided for contact matrix 'M_baseline' on line " + std::to_string(line_number));
-                }
+        } else if (param_name.rfind("kappa_", 0) == 0 && param_name != "kappa_end_times") {
+            try {
+                int idx = std::stoi(param_name.substr(6));
+                temp_kappa_map[idx] = scalar_val;
+            } catch (const std::exception& e) {
+                epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", 
+                    "Could not parse kappa index from parameter: " + param_name + " on line " + std::to_string(line_number));
             }
-            else {
-                epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Unrecognized parameter name '" + param_name +
-                                                       "' on line " + std::to_string(line_number) + ". Ignoring.");
-            }
+        } else if (param_name == "beta") params.beta = scalar_val;
+        else if (param_name == "theta") params.theta = scalar_val;
+        else if (param_name == "sigma") params.sigma = scalar_val;
+        else if (param_name == "gamma_p") params.gamma_p = scalar_val;
+        else if (param_name == "gamma_A") params.gamma_A = scalar_val;
+        else if (param_name == "gamma_I") params.gamma_I = scalar_val;
+        else if (param_name == "gamma_H") params.gamma_H = scalar_val;
+        else if (param_name == "gamma_ICU") params.gamma_ICU = scalar_val;
+        else if (param_name == "E0_multiplier") params.E0_multiplier = scalar_val;
+        else if (param_name == "P0_multiplier") params.P0_multiplier = scalar_val;
+        else if (param_name == "A0_multiplier") params.A0_multiplier = scalar_val;
+        else if (param_name == "I0_multiplier") params.I0_multiplier = scalar_val;
+        else if (param_name == "H0_multiplier") params.H0_multiplier = scalar_val;
+        else if (param_name == "ICU0_multiplier") params.ICU0_multiplier = scalar_val;
+        else if (param_name == "R0_multiplier") params.R0_multiplier = scalar_val;
+        else if (param_name == "D0_multiplier") params.D0_multiplier = scalar_val;
+        else if (param_name == "beta_end_times") params.beta_end_times = vector_val;
+        else if (param_name == "kappa_end_times") params.kappa_end_times = vector_val;
+        else if (param_name == "a" || param_name == "h_infec" || param_name == "p" || param_name == "h" || param_name == "icu" || param_name == "d_H" || param_name == "d_ICU") {
+            assignAgeVector(param_name, vector_val, params, num_age_classes);
+        } else {
+            epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Unrecognized parameter '" + param_name + "' on line " + std::to_string(line_number));
         }
     }
+
+    // Assemble beta_values from the map
+    if (!temp_beta_map.empty()) {
+        params.beta_values.resize(temp_beta_map.rbegin()->first);
+        for(const auto& pair : temp_beta_map) {
+            params.beta_values[pair.first - 1] = pair.second;
+        }
+    }
+    // Assemble kappa_values from the map
+    if (!temp_kappa_map.empty()) {
+        params.kappa_values.resize(temp_kappa_map.rbegin()->first);
+        for(const auto& pair : temp_kappa_map) {
+            params.kappa_values[pair.first - 1] = pair.second;
+        }
+    }
+
     file.close();
     return params;
 }

@@ -52,7 +52,14 @@ SEPAIHRDParameterManager::SEPAIHRDParameterManager(
         }
         validate_age_param(name, "a_") || validate_age_param(name, "h_infec_") || validate_age_param(name, "p_") || validate_age_param(name, "h_") || validate_age_param(name, "icu_") || validate_age_param(name, "d_H_") || validate_age_param(name, "d_ICU_");
 
-        if (name.rfind("kappa_", 0) == 0) {
+        if (name.rfind("beta_", 0) == 0) {
+            try {
+                std::stoul(name.substr(5)); // "beta_".length()
+            } catch (const std::exception& e) {
+                 THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Could not parse index from beta parameter: " + name);
+            }
+        }
+        else if (name.rfind("kappa_", 0) == 0) {
             auto npi_strat_base = model_->getNpiStrategy();
             if (!npi_strat_base) {
                 THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Cannot calibrate NPI parameter '" + name + "' as model has no NPI strategy.");
@@ -86,8 +93,19 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
 
     for (size_t i = 0; i < param_names_.size(); ++i) {
         const std::string& name = param_names_[i];
-        // Scalar parameters
         if (name == "beta") current_params_vec[i] = model_params_struct.beta;
+        else if (name.rfind("beta_", 0) == 0) { // Handle beta_1, beta_2, etc.
+             try {
+                size_t beta_idx = std::stoul(name.substr(5)) - 1; // "beta_1" -> index 0
+                if (beta_idx < model_params_struct.beta_values.size()) {
+                    current_params_vec[i] = model_params_struct.beta_values[beta_idx];
+                } else {
+                     throw ModelException("SEPAIHRDParameterManager::getCurrentParameters", "Beta name '" + name + "' implies out-of-bounds index.");
+                }
+            } catch (const std::exception& e) {
+                throw ModelException("SEPAIHRDParameterManager::getCurrentParameters", "Error processing beta parameter '" + name + "': " + e.what());
+            }
+        }
         else if (name == "theta") current_params_vec[i] = model_params_struct.theta;
         else if (name == "sigma") current_params_vec[i] = model_params_struct.sigma;
         else if (name == "gamma_p") current_params_vec[i] = model_params_struct.gamma_p;
@@ -103,7 +121,6 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name == "ICU0_multiplier") current_params_vec[i] = model_params_struct.ICU0_multiplier;
         else if (name == "R0_multiplier") current_params_vec[i] = model_params_struct.R0_multiplier;
         else if (name == "D0_multiplier") current_params_vec[i] = model_params_struct.D0_multiplier;
-        // Age-specific parameters
         else if (name.rfind("a_", 0) == 0) current_params_vec[i] = model_params_struct.a(std::stoul(name.substr(2)));
         else if (name.rfind("h_infec_", 0) == 0) current_params_vec[i] = model_params_struct.h_infec(std::stoul(name.substr(8)));
         else if (name.rfind("p_", 0) == 0) current_params_vec[i] = model_params_struct.p(std::stoul(name.substr(2)));
@@ -111,7 +128,6 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name.rfind("icu_", 0) == 0) current_params_vec[i] = model_params_struct.icu(std::stoul(name.substr(4)));
         else if (name.rfind("d_H_", 0) == 0) current_params_vec[i] = model_params_struct.d_H(std::stoul(name.substr(4)));
         else if (name.rfind("d_ICU_", 0) == 0) current_params_vec[i] = model_params_struct.d_ICU(std::stoul(name.substr(6)));
-        // Kappa parameters (calibratable ones like "kappa_2", "kappa_3", etc.)
         else if (name.rfind("kappa_", 0) == 0) {
             try {
                 size_t overall_kappa_idx = std::stoul(name.substr(6)) - 1;
@@ -137,72 +153,90 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
 
     Eigen::VectorXd constrained_params = applyConstraints(parameters_from_optimizer);
     
-    SEPAIHRDParameters current_model_params_struct = model_->getModelParameters();
-    bool model_params_struct_needs_update = false;
-
+    // Get a mutable copy of the model's current parameters
+    SEPAIHRDParameters updated_params = model_->getModelParameters();
+    
     auto npi_strat_base = model_->getNpiStrategy();
-    bool npi_values_need_update = false;
-    std::vector<double> collected_calibratable_npi_values;
-
     PiecewiseConstantNpiStrategy* piecewise_npi_strat = nullptr;
     if (npi_strat_base) {
         piecewise_npi_strat = dynamic_cast<PiecewiseConstantNpiStrategy*>(npi_strat_base.get());
-        if (piecewise_npi_strat) {
-            collected_calibratable_npi_values.resize(piecewise_npi_strat->getNumCalibratableNpiParams());
-        }
+    }
+
+    // Prepare to collect NPI values if they are being calibrated
+    bool npi_values_need_update = false;
+    std::vector<double> collected_calibratable_npi_values;
+    if (piecewise_npi_strat) {
+        collected_calibratable_npi_values = piecewise_npi_strat->getCalibratableValues();
     }
 
     for (size_t i = 0; i < param_names_.size(); ++i) {
         const std::string& name = param_names_[i];
         double value = constrained_params[i];
         
-
-        if (name == "beta") { current_model_params_struct.beta = value; model_params_struct_needs_update = true; }
-        else if (name == "theta") { current_model_params_struct.theta = value; model_params_struct_needs_update = true; }
-        else if (name == "sigma") { current_model_params_struct.sigma = value; model_params_struct_needs_update = true; }
-        else if (name == "gamma_p") { current_model_params_struct.gamma_p = value; model_params_struct_needs_update = true; }
-        else if (name == "gamma_A") { current_model_params_struct.gamma_A = value; model_params_struct_needs_update = true; }
-        else if (name == "gamma_I") { current_model_params_struct.gamma_I = value; model_params_struct_needs_update = true; }
-        else if (name == "gamma_H") { current_model_params_struct.gamma_H = value; model_params_struct_needs_update = true; }
-        else if (name == "gamma_ICU") { current_model_params_struct.gamma_ICU = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("a_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.a(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("h_infec_", 0) == 0) { size_t idx = std::stoul(name.substr(8)); current_model_params_struct.h_infec(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("p_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.p(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("h_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); current_model_params_struct.h(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.d_H(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); current_model_params_struct.d_ICU(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.icu(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); current_model_params_struct.d_H(idx) = value; model_params_struct_needs_update = true; }
-        else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); current_model_params_struct.d_ICU(idx) = value; model_params_struct_needs_update = true; }
-        else if (name == "E0_multiplier") { current_model_params_struct.E0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "P0_multiplier") { current_model_params_struct.P0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "A0_multiplier") { current_model_params_struct.A0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "I0_multiplier") { current_model_params_struct.I0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "H0_multiplier") { current_model_params_struct.H0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "ICU0_multiplier") { current_model_params_struct.ICU0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "R0_multiplier") { current_model_params_struct.R0_multiplier = value; model_params_struct_needs_update = true; }
-        else if (name == "D0_multiplier") { current_model_params_struct.D0_multiplier = value; model_params_struct_needs_update = true; }       
-        else if (name.rfind("kappa_", 0) == 0) {
-            if (!piecewise_npi_strat) {
-                throw ModelException("SEPAIHRDParameterManager::updateModelParameters", "Attempting to update kappa parameter '" + name + "' but NPI strategy is null or not PiecewiseConstant.");
-            }
-            for(size_t npi_cal_idx = 0; npi_cal_idx < piecewise_npi_strat->getNumCalibratableNpiParams(); ++npi_cal_idx) {
-                if (piecewise_npi_strat->getNpiParamName(npi_cal_idx) == name) {
-                    collected_calibratable_npi_values[npi_cal_idx] = value;
-                    npi_values_need_update = true;
-                    break; 
+        if (name == "beta") { updated_params.beta = value; }
+        else if (name.rfind("beta_", 0) == 0) {
+            try {
+                size_t beta_idx = std::stoul(name.substr(5)) - 1; // "beta_1" -> index 0
+                if (beta_idx < updated_params.beta_values.size()) {
+                    updated_params.beta_values[beta_idx] = value;
+                } else {
+                    THROW_INVALID_PARAM("updateModelParameters", "Beta index out of range for name: " + name);
                 }
+            } catch (const std::exception& e) {
+                THROW_INVALID_PARAM("updateModelParameters", "Invalid beta parameter name: " + name);
+            }
+        }
+        else if (name == "theta") { updated_params.theta = value; }
+        else if (name == "sigma") { updated_params.sigma = value; }
+        else if (name == "gamma_p") { updated_params.gamma_p = value; }
+        else if (name == "gamma_A") { updated_params.gamma_A = value; }
+        else if (name == "gamma_I") { updated_params.gamma_I = value; }
+        else if (name == "gamma_H") { updated_params.gamma_H = value; }
+        else if (name == "gamma_ICU") { updated_params.gamma_ICU = value; }
+        else if (name.rfind("a_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); updated_params.a(idx) = value; }
+        else if (name.rfind("h_infec_", 0) == 0) { size_t idx = std::stoul(name.substr(8)); updated_params.h_infec(idx) = value; }
+        else if (name.rfind("p_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); updated_params.p(idx) = value; }
+        else if (name.rfind("h_", 0) == 0) { size_t idx = std::stoul(name.substr(2)); updated_params.h(idx) = value; }
+        else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); updated_params.icu(idx) = value; }
+        else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); updated_params.d_H(idx) = value; }
+        else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); updated_params.d_ICU(idx) = value; }
+        else if (name == "E0_multiplier") { updated_params.E0_multiplier = value; }
+        else if (name == "P0_multiplier") { updated_params.P0_multiplier = value; }
+        else if (name == "A0_multiplier") { updated_params.A0_multiplier = value; }
+        else if (name == "I0_multiplier") { updated_params.I0_multiplier = value; }
+        else if (name == "H0_multiplier") { updated_params.H0_multiplier = value; }
+        else if (name == "ICU0_multiplier") { updated_params.ICU0_multiplier = value; }
+        else if (name == "R0_multiplier") { updated_params.R0_multiplier = value; }
+        else if (name == "D0_multiplier") { updated_params.D0_multiplier = value; }       
+        else if (name.rfind("kappa_", 0) == 0) {
+            if (piecewise_npi_strat) {
+                bool found = false;
+                for(size_t npi_cal_idx = 0; npi_cal_idx < piecewise_npi_strat->getNumCalibratableNpiParams(); ++npi_cal_idx) {
+                    if (piecewise_npi_strat->getNpiParamName(npi_cal_idx) == name) {
+                        collected_calibratable_npi_values[npi_cal_idx] = value;
+                        npi_values_need_update = true;
+                        found = true;
+                        break; 
+                    }
+                }
+                if (!found) {
+                     std::cerr << "[Warning] SEPAIHRDParameterManager: NPI param '" << name << "' not found as calibratable." << std::endl;
+                }
+            } else {
+                 throw ModelException("updateModelParameters", "Attempting to update kappa but NPI strategy is null/not piecewise.");
             }
         } else {
-             std::cerr << "[Warning] SEPAIHRDParameterManager: Unknown parameter name '" << name << "' encountered during updateModelParameters map construction." << std::endl;
+             std::cerr << "[Warning] SEPAIHRDParameterManager: Unknown parameter name '" << name << "' encountered." << std::endl;
         }
     }
 
-    if (model_params_struct_needs_update) {
-        model_->setModelParameters(current_model_params_struct);
-    }
+    // Set the full parameter struct back to the model.
+    // The model's setModelParameters method is responsible for updating all internal state,
+    // including re-initializing the beta_strategy_.
+    model_->setModelParameters(updated_params);
 
+    // If any NPI parameters were changed, update the NPI strategy object.
+    // This is a direct modification of the strategy object held by the model.
     if (npi_values_need_update && piecewise_npi_strat) {
         piecewise_npi_strat->setCalibratableValues(collected_calibratable_npi_values);
     }

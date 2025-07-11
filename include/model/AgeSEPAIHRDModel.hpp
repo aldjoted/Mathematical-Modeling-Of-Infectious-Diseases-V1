@@ -4,6 +4,7 @@
 #include "sir_age_structured/EpidemicModel.hpp"
 #include "model/parameters/SEPAIHRDParameters.hpp"
 #include "model/interfaces/INpiStrategy.hpp"
+#include "model/PiecewiseConstantParameterStrategy.hpp"
 #include <Eigen/Dense>
 #include <vector>
 #include <string>
@@ -33,6 +34,12 @@ namespace epidemic {
         
         /** @brief Current effective transmission probability per contact. */
         double beta;
+
+        /** @brief End times for the piecewise-constant beta values */
+        std::vector<double> beta_end_times_;
+
+        /** @brief The sequence of beta values */
+        std::vector<double> beta_values_;
 
         /** @brief Age-specific relative susceptibility vector */
         Eigen::VectorXd a; 
@@ -78,6 +85,9 @@ namespace epidemic {
         
         /** @brief Strategy defining NPI effects on contact rates */
         std::shared_ptr<INpiStrategy> npi_strategy;
+
+        /** @brief Strategy for piecewise constant parameters */
+        std::unique_ptr<PiecewiseConstantParameterStrategy> beta_strategy_;
     
         /** @brief Original transmission rate before interventions */
         double baseline_beta;
@@ -112,6 +122,13 @@ namespace epidemic {
          * @return Scaled contact matrix
          */
         Eigen::MatrixXd computeContactMatrix(double time) const;
+
+        /**
+         * @brief Computes the current beta value based on the schedule and time.
+         * @param time Current simulation time
+         * @return Current beta value
+         */
+        double computeBeta(double time) const;
     
     public:
         /**

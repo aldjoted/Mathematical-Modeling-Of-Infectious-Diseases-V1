@@ -1,72 +1,95 @@
 # Particle Swarm Optimization Settings
 # Note: For boolean flags, use 1.0 for true and 0.0 for false.
 
-# iterations: Total number of optimization iterations.
-# Default: 100
-iterations 1
+# === Core PSO Parameters ===
 
-# swarm_size: Number of particles in the swarm.
-# Default: 30
-swarm_size 1
+# iterations: Total number of optimization iterations
+# Range: > 0
+iterations 50
 
-# omega_start: Initial value of the inertia weight (omega). Used if use_constriction_factor is false.
-# Controls the influence of the particle's previous velocity.
-# Default: 0.9
+# swarm_size: Number of particles in the swarm
+# Range: > 0
+swarm_size 100
+
+# omega_start: Initial inertia weight for velocity update
+# Range: >= 0
 omega_start 0.9
 
-# omega_end: Final value of the inertia weight (omega). Linearly interpolated from omega_start.
-# Default: 0.4
+# omega_end: Final inertia weight for velocity update
+# Range: >= 0
 omega_end 0.4
 
-# c1_initial: Initial value for the cognitive coefficient (c1).
-# Weight of the particle's personal best experience.
-# Default: 1.5
+# c1_initial: Initial cognitive acceleration coefficient
+# Range: >= 0
 c1_initial 2.0
 
-# c1_final: Final value for the cognitive coefficient (c1). Linearly interpolated.
-# Default: 1.5
+# c1_final: Final cognitive acceleration coefficient
+# Range: >= 0
 c1_final 0.5
 
-# c2_initial: Initial value for the social coefficient (c2).
-# Weight of the swarm's global (or local) best experience.
-# Default: 1.5
+# c2_initial: Initial social acceleration coefficient
+# Range: >= 0
 c2_initial 0.5
 
-# c2_final: Final value for the social coefficient (c2). Linearly interpolated.
-# Default: 1.5
+# c2_final: Final social acceleration coefficient
+# Range: >= 0
 c2_final 2.0
 
-# report_interval: Frequency (in iterations) for logging general progress reports.
-# Default: 10
+# report_interval: Number of iterations between progress reports
+# Range: > 0
 report_interval 5
 
-# use_lbest_topology: If true (1.0), particles are attracted to their local best neighbor (ring topology).
-# If false (0.0), particles are attracted to the global best (star topology).
-# Default: 0.0 (false)
-use_lbest_topology 1.0 
+# === Advanced Algorithm Parameters ===
 
-# lbest_neighborhood_k: If LBest topology is used, this defines the number of neighbors on each side (k).
-# Total neighborhood size is 2k+1 (particle itself + k left + k right).
-# Default: 1
-lbest_neighborhood_k 5.0
+# variant: PSO variant to use
+# 0: STANDARD - Classical PSO
+# 1: QUANTUM - Quantum-behaved PSO
+# 2: ADAPTIVE - PSO with evolutionary state estimation
+# 3: LEVY_FLIGHT - PSO with Lévy flight
+# 4: HYBRID - Dynamic strategy switching
+variant 2
 
-# use_constriction_factor: If true (1.0), uses Clerc's constriction factor for velocity updates, ignoring omega.
-# Helps ensure convergence.
-# Default: 0.0 (false)
-use_constriction_factor 0.0 
+# topology: Swarm topology for particle communication
+# 0: GLOBAL_BEST - Fully connected
+# 1: LOCAL_BEST - Ring topology
+# 2: VON_NEUMANN - Grid topology
+# 3: RANDOM_DYNAMIC - Dynamic random connections
+topology 0
 
-# log_new_gbest: If true (1.0), log a message every time a new global best solution is found.
-# Default: 1.0 (true)
-log_new_gbest 0.0
+# use_opposition_learning: Enable opposition-based learning for initialization
+# 0.0: Disabled, 1.0: Enabled
+use_opposition_learning 1.0
 
-# log_particle_details: If true (1.0), log detailed info (position, velocity, fitness) for some particles.
-# Default: 0.0 (false)
-log_particle_details 0.0
+# use_parallel: Enable parallel computation using OpenMP
+# 0.0: Disabled, 1.0: Enabled
+use_parallel 1.0
 
-# particle_log_interval: Iteration interval for logging particle details, if log_particle_details is true.
-# Default: 10
-particle_log_interval 10
+# use_adaptive_parameters: Enable adaptive parameter control
+# 0.0: Disabled, 1.0: Enabled
+use_adaptive_parameters 1.0
 
-# particles_to_log_count: Number of particles (from the start of the swarm) to log details for.
-# Default: 3
-particles_to_log_count 3
+# diversity_threshold: Minimum swarm diversity threshold
+# Range: 0.0 - 1.0
+diversity_threshold 0.1
+
+# restart_threshold: Minimum improvement threshold for restart
+# Range: > 0
+restart_threshold 1e-6
+
+# quantum_beta: Contraction-expansion coefficient for QPSO
+# Range: 0.5 - 1.5 recommended
+quantum_beta 1.0
+
+# levy_alpha: Stability parameter for Lévy distribution
+# Range: 1.0 - 2.0 recommended
+levy_alpha 1.5
+
+# max_stagnation: Maximum iterations without improvement before restart
+# Range: > 0
+max_stagnation 20
+
+# === Logging Configuration ===
+
+# log_evolutionary_state: Log evolutionary state transitions
+# 0.0: Disabled, 1.0: Enabled
+log_evolutionary_state 1.0

@@ -29,6 +29,12 @@ struct SEPAIHRDParameters {
     /** @brief Transmission rate (infectiousness parameter) */
     double beta;
 
+    /** @brief End times for beta adjustments */
+    std::vector<double> beta_end_times;
+
+    /** @brief Beta values corresponding to each beta period */
+    std::vector<double> beta_values;
+
     /** @brief Age-specific relative susceptibility vector */
     Eigen::VectorXd a; 
 

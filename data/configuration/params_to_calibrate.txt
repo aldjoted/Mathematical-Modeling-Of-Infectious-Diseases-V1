@@ -1,12 +1,22 @@
+# --- START OF FILE params_to_calibrate.txt ---
+
 # Parameters to be calibrated for the SEPAIHRD model (Spain 2020)
 # Note: kappa_1 is fixed at 1.0 and is not listed here.
 # The following kappa_X names correspond to the periods after the baseline.
 
-# Disease transmission parameters
-beta
+# --- Time-varying Beta parameters ---
+beta_1
+beta_2
+beta_3
+beta_4
+beta_5
+beta_6
+beta_7
+
+# --- Other Disease transmission parameters ---
 theta
 
-# Disease progression rates (inverse durations)
+# --- Disease progression rates (inverse durations) ---
 sigma
 gamma_p
 gamma_A
@@ -14,7 +24,7 @@ gamma_I
 gamma_H
 gamma_ICU
 
-# Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+)
+# --- Age-specific parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
 # Fraction asymptomatic (p_i)
 p_0
 p_1
@@ -50,7 +60,7 @@ h_infec_1
 h_infec_2
 h_infec_3
 
-# NPI scaling factors (kappa_period_X, corresponding to periods 2 through 8 from Table 1)
+# --- NPI scaling factors (calibrating all kappa values except the fixed kappa_1) ---
 kappa_2
 kappa_3
 kappa_4

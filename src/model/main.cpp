@@ -203,6 +203,7 @@ int main(int argc, char* argv[]) {
         CalibrationData data(data_path, "2020-03-01", "2020-12-31");
         Logger::getInstance().info("main", "Loading contact matrix from: " + contact_matrix_path);
         MatrixXd C = readMatrixFromCSV(contact_matrix_path, num_age_classes, num_age_classes);
+        std::cout << "Contact matrix loaded successfully." << std::endl;
         const auto N = data.getPopulationByAgeGroup();
         if (N.size() != num_age_classes) {
             throw DataFormatException("main", "Population data size mismatch");
@@ -213,10 +214,13 @@ int main(int argc, char* argv[]) {
         params.N = N;
         params.M_baseline = C;
         
-        if (params.kappa_end_times.size() != 7 || params.kappa_values.size() != 7) {
-            throw DataFormatException("main", "Invalid kappa parameters count - expected 7 each");
+        if (params.kappa_end_times.size() != params.beta_end_times.size()) {
+             Logger::getInstance().warning("main", "Kappa and Beta end times have different lengths. This is supported but ensure it is intentional.");
         }
-
+        if (params.kappa_values.size() != params.kappa_end_times.size() || params.beta_values.size() != params.beta_end_times.size()){
+            throw DataFormatException("main", "Mismatch between end times and values for kappa or beta schedules.");
+        }
+        
         std::vector<std::string> all_kappa_parameter_names;
         for (size_t i = 0; i < params.kappa_values.size(); ++i) {
             all_kappa_parameter_names.push_back("kappa_" + std::to_string(i + 1));
@@ -420,8 +424,8 @@ int main(int argc, char* argv[]) {
             Logger::getInstance().info("main", "Starting comprehensive post-calibration analysis...");
             try {
                 // Créer le modèle avec les paramètres finaux pour l'analyseur
-                auto final_npi_strategy = createNpiStrategy(final_calibrated_params, all_kappa_parameter_names, overall_param_bounds);
-                auto final_model_template = std::make_shared<AgeSEPAIHRDModel>(final_calibrated_params, final_npi_strategy);
+                auto post_analysis_npi_strategy = createNpiStrategy(final_calibrated_params, all_kappa_parameter_names, overall_param_bounds, fixed_kappa_model_index);
+                auto final_model_template = std::make_shared<AgeSEPAIHRDModel>(final_calibrated_params, post_analysis_npi_strategy);
 
                 auto post_calibration_analyser = std::make_shared<PostCalibrationAnalyser>(
                     final_model_template,
@@ -435,13 +439,13 @@ int main(int argc, char* argv[]) {
                 int total_sample_size = mcmc_samples.size();
                 
                 // Lire les paramètres pour l'analyse
-                std::map<std::string, double> mcmc_settings = readMetropolisHastingsSettings(FileUtils::joinPaths(project_root, "data/configuration/mcmc_settings.txt"));
+                std::map<std::string, double> analysis_mcmc_settings = readMetropolisHastingsSettings(FileUtils::joinPaths(project_root, "data/configuration/mcmc_settings.txt"));
                 auto get_setting = [&](const std::string& key, int default_val) {
-                    auto it = mcmc_settings.find(key);
-                    return (it != mcmc_settings.end()) ? static_cast<int>(it->second) : default_val;
+                    auto it = analysis_mcmc_settings.find(key);
+                    return (it != analysis_mcmc_settings.end()) ? static_cast<int>(it->second) : default_val;
                 };
 
-                int num_samples_for_ppc = get_setting("ppc_samples", total_sample_size);
+                int num_samples_for_ppc = get_setting("ppc_samples", total_sample_size > 500 ? 500 : total_sample_size);
                 if (mcmc_samples.size() < static_cast<size_t>(num_samples_for_ppc)) {
                     num_samples_for_ppc = mcmc_samples.size();
                 }
@@ -452,8 +456,8 @@ int main(int argc, char* argv[]) {
                     mcmc_samples,
                     calibrator.getParameterManager(),
                     num_samples_for_ppc,
-                    0,
-                    1,
+                    0, // burn_in for analysis
+                    1, // thinning for analysis
                     batch_size
                 );
 

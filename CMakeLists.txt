@@ -76,6 +76,7 @@ set(EPIDEMIC_MODELS_SRCS
     src/model/optimizers/NUTSSampler.cpp
     src/model/ReproductionNumberCalculator.cpp
     src/model/PostCalibrationAnalyser.cpp
+    src/model/PiecewiseConstantParameterStrategy.cpp
 )
 set(EPIDEMIC_UTILS_SRCS
     src/utils/FileUtils.cpp
