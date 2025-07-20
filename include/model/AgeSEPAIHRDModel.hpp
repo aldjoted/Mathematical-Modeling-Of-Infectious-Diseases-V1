@@ -122,6 +122,8 @@ namespace epidemic {
          * @return Scaled contact matrix
          */
         Eigen::MatrixXd computeContactMatrix(double time) const;
+    
+    public:
 
         /**
          * @brief Computes the current beta value based on the schedule and time.
@@ -129,8 +131,7 @@ namespace epidemic {
          * @return Current beta value
          */
         double computeBeta(double time) const;
-    
-    public:
+        
         /**
          * @brief Constructs the age-structured SEPAIHRD model
          * @param params Model parameters struct containing all necessary parameters (excluding NPI schedule)

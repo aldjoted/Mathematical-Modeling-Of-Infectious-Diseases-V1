@@ -3,7 +3,7 @@
 
 # iterations: Total number of optimization iterations.
 # Default: 5000
-iterations 2000
+iterations 20
 
 # initial_step: Initial coefficient for the step size.
 # Default: 1.0

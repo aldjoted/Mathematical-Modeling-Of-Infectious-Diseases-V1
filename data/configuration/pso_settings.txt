@@ -5,11 +5,11 @@
 
 # iterations: Total number of optimization iterations
 # Range: > 0
-iterations 50
+iterations 100
 
 # swarm_size: Number of particles in the swarm
 # Range: > 0
-swarm_size 100
+swarm_size 150
 
 # omega_start: Initial inertia weight for velocity update
 # Range: >= 0
@@ -47,14 +47,14 @@ report_interval 5
 # 2: ADAPTIVE - PSO with evolutionary state estimation
 # 3: LEVY_FLIGHT - PSO with Lévy flight
 # 4: HYBRID - Dynamic strategy switching
-variant 2
+variant 0
 
 # topology: Swarm topology for particle communication
 # 0: GLOBAL_BEST - Fully connected
 # 1: LOCAL_BEST - Ring topology
 # 2: VON_NEUMANN - Grid topology
 # 3: RANDOM_DYNAMIC - Dynamic random connections
-topology 0
+topology 2
 
 # use_opposition_learning: Enable opposition-based learning for initialization
 # 0.0: Disabled, 1.0: Enabled

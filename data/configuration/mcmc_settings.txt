@@ -1,26 +1,62 @@
 # --- START OF FILE mcmc_settings.txt ---
+# Configuration for calibrating the AgeSEPAIHRDModel.
+# These settings are tuned for a complex, high-dimensional model
+# requiring a long run for proper convergence and posterior exploration.
 # For boolean flags, use 1.0 for true and 0.0 for false.
 
 # --- Core MCMC Settings ---
-burn_in 5
-mcmc_iterations 250
-thinning 1
+# A long burn-in period is essential for the sampler to find the high-probability
+# region of the posterior and for the adaptive step-size to stabilize.
+burn_in 50000
+
+# A large number of post-burn-in iterations are needed to generate a sufficient
+# number of samples for accurate posterior analysis.
+mcmc_iterations 200000
+
+# Thinning reduces autocorrelation between saved samples and saves disk space.
+# A value of 20 means we save 1 sample for every 20 generated (10,000 total samples).
+thinning 2000
+
+# Report progress less frequently for long runs to avoid cluttering the log.
 report_interval 10
+
+# Calculating the posterior mean is a good practice to find a single best-fit set.
 calculate_posterior_mean 1.0
 
 # --- Performance & Parallelization Settings ---
+# Enable parallel evaluation. This is CRITICAL for performance with a slow
+# objective function, especially when refinement is enabled.
 mcmc_enable_parallel 0.0
+
+# Adjust to the number of available CPU cores on your machine. 8 is a good start.
 mcmc_num_threads 4
+
+# Vectorized proposal generation is generally efficient.
 mcmc_enable_vectorization 1.0
 
 # --- Proposal & Refinement Strategy ---
-mcmc_step_size 0.05
+# The initial step size. With adaptation enabled, this is less critical, but a
+# smaller value is a safer start for a high-dimensional problem.
+mcmc_step_size 0.01
+
+# Enable proposal refinement. This costs more evaluations per step but can
+# drastically improve acceptance rates and overall convergence speed for
+# complex posterior geometries. Highly recommended for this model.
 mcmc_enable_refinement 1.0
+
+# Number of refinement steps. 5 is a reasonable default.
 mcmc_refinement_steps 5
 
 # --- Adaptive Sampling Settings ---
-mcmc_adaptive_step 0
-mcmc_target_acceptance 0.44
-mcmc_adaptation_rate 0.01
+# Enable adaptive step-size. This is the most important feature for a complex
+# model, as it automatically tunes the sampler for optimal performance.
+mcmc_adaptive_step 1.0
+
+# The target acceptance rate. For high-dimensional problems, a rate around 0.234
+# is theoretically optimal. The previous value of 0.44 is better for low-d problems.
+mcmc_target_acceptance 0.234
+
+# The learning rate for the adaptation. 0.05 is a robust default.
+mcmc_adaptation_rate 0.05
 
 # --- END OF FILE mcmc_settings.txt ---

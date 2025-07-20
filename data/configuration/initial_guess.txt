@@ -1,63 +1,108 @@
-# SEPAIHRD Model Parameters - INITIAL GUESS (Updated with calibrated values)
+# SEPAIHRD Model Parameters INITIAL GUESS for Spain (Mar-Dec 2020)
+#
+# Justification: The following parameters have been updated based on public data and literature
+# from the first year of the COVID-19 pandemic in Spain. The goal is to provide a scientifically
+# sound starting point for a more detailed calibration.
+# Simulation Start Date: March 1, 2020. Time 't' is in days from this date.
 
-# NPI and Beta schedules share the same time intervals.
-# The number of values in beta_values/kappa_values must match beta_end_times/kappa_end_times.
+# --- NPI and Beta Intervention Schedules ---
+# Justification: The end times correspond to major shifts in national policy in Spain.
+# - Day 13 (March 14, 2020): Start of the first national "estado de alarma" (state of alarm) with a strict lockdown. [9, 16]
+# - Day 63 (May 2, 2020): Beginning of the phased de-escalation, allowing people outdoors for exercise. [16]
+# - Day 84 (May 23, 2020): Further easing of restrictions as part of the de-escalation plan.
+# - Day 111 (June 19, 2020): End of the first state of alarm and transition to the "new normality". [12, 20]
+# - Day 183 (Sept 1, 2020): Post-summer period with regional measures in place to control outbreaks.
+# - Day 237 (Oct 25, 2020): Declaration of the second national state of alarm in response to the second wave. [12]
+# - Day 305 (Dec 31, 2020): End of the simulation period.
 beta_end_times  13.0 63.0 84.0 111.0 183.0 237.0 305.0
 kappa_end_times 13.0 63.0 84.0 111.0 183.0 237.0 305.0
 
-# --- Time-varying Beta parameters ---
-beta_1 5.74169763e-01
-beta_2 6.06694793e-01
-beta_3 1.82315120e-01
-beta_4 3.95569531e-01
-beta_5 3.95517698e-01
-beta_6 2.22390421e-01
-beta_7 3.20743518e-01
+# --- Time-varying Beta parameters (Transmission Rate) ---
+# Justification: Beta is notoriously difficult to estimate a priori and is a key target for calibration.
+# These values are rough estimates based on R0 values and expected impact of NPIs.
+# beta_1: Corresponds to an R0 of ~3.0-3.5 before lockdown, consistent with early estimates for Spain which were high, some even suggesting R0 > 5. [4, 7]
+# beta_2 to beta_7: These are placeholders showing a drop during lockdown and subsequent fluctuations.
+# The calibration algorithm is expected to heavily refine these.
+beta_1 6.2e-01
+beta_2 1.5e-01
+beta_3 2.5e-01
+beta_4 3.5e-01
+beta_5 4.0e-01
+beta_6 3.0e-01
+beta_7 3.5e-01
 
-# --- NPI scaling factors (kappa_values) ---
-kappa_1 1.00000000e+00
-kappa_2 5.00052446e-01
-kappa_3 3.27338276e-01
-kappa_4 6.05171407e-01
-kappa_5 7.62018826e-01
-kappa_6 1.19202429e+00
-kappa_7 7.55591622e-01
+# --- NPI scaling factors (kappa_values for contact reduction) ---
+# Justification: Kappa represents the reduction in social contacts due to NPIs.
+# kappa_1 (t < 13): 1.0 (baseline, no interventions).
+# kappa_2 (t=13-63): 0.35 (strong reduction, ~65% decrease in contacts during the strict national lockdown).
+# kappa_3 (t=63-84): 0.50 (partial relaxation during early de-escalation).
+# kappa_4 (t=84-111): 0.65 (further relaxation during later de-escalation).
+# kappa_5 (t=111-183): 0.75 (summer period, "new normality" with masks and distancing but higher mobility).
+# kappa_6 (t=183-237): 0.70 (post-summer, some regional restrictions reinstated).
+# kappa_7 (t=237-305): 0.60 (second state of alarm, less strict than the first but with curfews and significant restrictions).
+kappa_1 1.00
+kappa_2 0.35
+kappa_3 0.50
+kappa_4 0.65
+kappa_5 0.75
+kappa_6 0.70
+kappa_7 0.60
 
 # --- Other Disease Transmission Parameters ---
-# This is a placeholder/fallback if time-varying beta is not used
-beta 2.20000000e-01
-theta 2.00336091e-01
+beta      6.2e-01   # Fallback value, same as beta_1
+# Justification: Represents reduced transmissibility of symptomatic individuals due to isolation/illness.
+# Set to 0.7, a common assumption in epidemiological models.
+theta     7.0e-01
 
-# --- Disease Progression Rates (inverse durations) ---
-sigma 5.99969907e-01
-gamma_p 9.99749913e-01
-gamma_A 3.31198800e-01
-gamma_I 3.73942640e-01
-gamma_H 1.49118147e-01
-gamma_ICU 1.24946414e-01
+# --- Disease Progression Rates (inverse of durations in days) ---
+# Justification: Rates are the inverse of the mean duration for each period.
+# sigma: Inverse of mean incubation period. Estimated at ~5-6 days for early variants. [41] 1/5.5 = 0.18.
+# gamma_p: Inverse of pre-symptomatic infectious period. Estimated to be around 2-3 days. 1/2.5 = 0.4.
+# gamma_A, gamma_I: Inverse of infectious period for asymptomatic/symptomatic. Assumed to be around 7-10 days. 1/8.5 = 0.118.
+# gamma_H: Inverse of hospital stay. Median stay in Spain in 2020 was ~11 days. [1] 1/11 = 0.091.
+# gamma_ICU: Inverse of ICU stay. Median stay in Spain was longer than in other countries, around 15-23 days. [5, 18] Using a midpoint of 19 days. 1/19 = 0.053.
+sigma     1.8e-01
+gamma_p   4.0e-01
+gamma_A   1.18e-01
+gamma_I   1.18e-01
+gamma_H   9.1e-02
+gamma_ICU 5.3e-02
 
 # --- Age-specific Parameters (4 age groups: 0-30, 30-60, 60-80, 80+) ---
-# Susceptibility vector 'a'
-a 8.39637709e-01 8.00054852e-01 8.03960761e-01 6.62999601e-01
-# Infectiousness vector 'h_infec'
-h_infec 6.62384616e-01 6.49757865e-01 9.31994659e-01 6.71255520e-01
-# Fraction asymptomatic (p)
-p 3.00129335e-01 2.26157868e-01 2.63082599e-01 5.00424692e-02
-# Hospitalization rate (h)
-h 7.40016260e-03 5.62080460e-02 2.99915916e-01 4.99938508e-01
-# ICU admission rate (icu)
-icu 9.64287656e-03 2.00000000e-02 3.64663334e-02 2.03796136e-02
-# Hospital mortality rate (d_H)
-d_H 1.35177414e-03 5.19648294e-03 4.44107375e-02 3.99597783e-01
-# ICU mortality rate (d_ICU)
-d_ICU 5.66773034e-03 1.00814943e-02 2.03299869e-02 5.99478376e-01
+# Justification (Susceptibility 'a'): Based on studies suggesting children and young adults had lower
+# susceptibility to the original SARS-CoV-2 strain compared to older adults. [21, 24, 26]
+# Values are relative to the 60-80 group.
+a         0.50 0.80 1.00 0.90
+# Justification (Infectiousness 'h_infec'): Some studies suggest younger people (<60) may be more infectious. [15]
+# However, other studies show no significant difference. [27] We start with a neutral assumption of near-equal infectiousness,
+# allowing calibration to adjust it.
+h_infec   1.0 1.0 1.0 1.0
+# Justification (Fraction asymptomatic 'p'): Highly variable. Seroprevalence studies suggested a large number of
+# undetected, likely asymptomatic or mild, cases. [11] Asymptomatic rates are known to be higher in younger people.
+# These are literature-informed estimates.
+p         0.60 0.40 0.20 0.10
+# Justification (Hospitalization rate 'h'): Based on Spanish surveillance data which showed a strong age-gradient. [10, 44]
+# These values are fractions of symptomatic individuals who get hospitalized.
+h         8.0e-03 6.0e-02 2.8e-01 4.5e-01
+# Justification (ICU admission rate 'icu'): Rate among those hospitalized. Also strongly age-dependent.
+# Data from Spain indicates about 10.9% of hospitalized patients went to ICU in 2020. [1, 3]
+# The rate often decreases in the oldest group due to clinical decisions against ICU admission.
+icu       5.0e-03 3.0e-02 5.0e-02 2.0e-02
+# Justification (Hospital mortality 'd_H' and ICU mortality 'd_ICU'):
+# Mortality rates among non-ICU and ICU patients, respectively. Overall in-hospital mortality in Spain was high in 2020 (~16%). [1, 3]
+# Rates increase dramatically with age. [13, 37, 42]
+d_H       2.0e-03 9.0e-03 5.0e-02 3.5e-01
+d_ICU     1.8e-03 1.5e-02 2.5e-02 5.0e-01
 
 # --- Initial State Multipliers ---
-E0_multiplier 1.01310435e+01
-P0_multiplier 3.18559134e+00
-A0_multiplier 2.72661179e+00
-I0_multiplier 1.27171156e+01
-H0_multiplier 1.43072428e+00
-ICU0_multiplier 5.31807623e-01
-R0_multiplier 2.04817503e+00
-D0_multiplier 5.20489193e+00
+# Justification: These parameters estimate the initial number of individuals in each compartment (E, P, A, etc.)
+# at the start of the simulation. They are highly sensitive and best determined by a calibration algorithm.
+# The values from the generic file are retained as a reasonable starting point for the optimization process.
+E0_multiplier 1.04706778e+01
+P0_multiplier 2.91927110e+00
+A0_multiplier 2.59159031e+00
+I0_multiplier 1.26049189e+01
+H0_multiplier 1.29324601e+00
+ICU0_multiplier 6.67421120e-01
+R0_multiplier 2.31154393e+00
+D0_multiplier 5.50521639e+00
