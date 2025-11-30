@@ -13,6 +13,7 @@
 #include <memory>
 #include <limits> 
 #include <future>
+#include <mutex>
 
 namespace epidemic {
 
@@ -84,7 +85,6 @@ namespace epidemic {
         /** @brief Reference to the manager for model parameters. */
         IParameterManager& parameterManager_;
 
-    private:
         /** @brief Shared pointer to the epidemiological model. */
         std::shared_ptr<AgeSEPAIHRDModel> model_;
         /** @brief Reference to the cache for simulation results and likelihoods. */
@@ -101,7 +101,8 @@ namespace epidemic {
         double abs_err_;
         /** @brief Relative error tolerance for the ODE solver. */
         double rel_err_;
-    
+
+    private:
         // Internal simulator instance
         /** @brief Unique pointer to the internal ODE simulator instance. */
         mutable std::unique_ptr<AgeSEPAIHRDSimulator> simulator_;
@@ -159,6 +160,8 @@ namespace epidemic {
          */
         void ensureSimulatorExists() const;
 
+        // Note: Thread safety is achieved by cloning the model in calculate(),
+        // so no mutex is needed for parallel gradient calculations.
     };
     
 } // namespace epidemic

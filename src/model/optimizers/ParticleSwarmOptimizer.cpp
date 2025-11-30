@@ -223,6 +223,27 @@ OptimizationResult ParticleSwarmOptimization::optimize(
     OptimizationResult result;
     result.bestParameters = gbest_position;
     result.bestObjectiveValue = gbest_value;
+    
+    // Estimate covariance from final swarm for Phase 2 transfer
+    // This provides correlation structure learned from particle distribution
+    Eigen::VectorXd mean_position = Eigen::VectorXd::Zero(n);
+    for (const auto& p : swarm) {
+        mean_position += p.pbest_position;
+    }
+    mean_position /= swarm_size_;
+    
+    result.finalCovariance = Eigen::MatrixXd::Zero(n, n);
+    for (const auto& p : swarm) {
+        Eigen::VectorXd diff = p.pbest_position - mean_position;
+        result.finalCovariance += diff * diff.transpose();
+    }
+    result.finalCovariance /= (swarm_size_ - 1);  // Unbiased estimator
+    
+    // Add small regularization for numerical stability
+    result.finalCovariance += 1e-6 * Eigen::MatrixXd::Identity(n, n);
+    
+    logger.info(logger_source_id_, "Estimated covariance from swarm for Phase 2 transfer.");
+    
     return result;
 }
 
@@ -246,6 +267,10 @@ void ParticleSwarmOptimization::initializeSwarm(
         ub[k] = parameterManager.getUpperBoundForParamIndex(k);
     }
     
+    // Pre-generate seeds for thread safety
+    std::vector<unsigned int> seeds(swarm_size_);
+    for(int i=0; i<swarm_size_; ++i) seeds[i] = static_cast<unsigned int>(rng_());
+
     // Initialize particles
     #pragma omp parallel for if(use_parallel_)
     for (int i = 0; i < swarm_size_; ++i) {
@@ -254,7 +279,7 @@ void ParticleSwarmOptimization::initializeSwarm(
         swarm[i].quantum_position.resize(n);
         
         // Thread-local RNG for parallel execution
-        std::mt19937 local_rng(rng_() + i);
+        std::mt19937 local_rng(seeds[i]);
         std::uniform_real_distribution<> local_uniform(0.0, 1.0);
         
         // First particle uses initial parameters if provided
@@ -347,43 +372,50 @@ void ParticleSwarmOptimization::updateParticles(
         mean_best_position = calculateMeanBestPosition(swarm);
     }
     
+    // Pre-generate seeds for thread safety
+    std::vector<unsigned int> seeds(swarm_size_);
+    for(int i=0; i<swarm_size_; ++i) seeds[i] = static_cast<unsigned int>(rng_());
+
     // Update particles based on variant
     #pragma omp parallel for if(use_parallel_)
     for (int i = 0; i < swarm_size_; ++i) {
+        std::mt19937 local_rng(seeds[i]);
+        std::uniform_real_distribution<> local_uniform(0.0, 1.0);
+
         Eigen::VectorXd neighborhood_best = (topology_ == TopologyType::GLOBAL_BEST) ?
             gbest_position : getNeighborhoodBest(swarm, i);
         
         switch (variant_) {
             case PSOVariant::STANDARD:
                 standardPSOUpdate(swarm[i], neighborhood_best,
-                                omega, c1, c2, lb, ub);
+                                omega, c1, c2, lb, ub, local_rng);
                 break;
                 
             case PSOVariant::QUANTUM:
                 quantumPSOUpdate(swarm[i], gbest_position, mean_best_position,
-                               iteration, lb, ub);
+                               iteration, lb, ub, local_rng);
                 break;
                 
             case PSOVariant::LEVY_FLIGHT:
-                levyFlightUpdate(swarm[i], gbest_position, omega, c1, c2, lb, ub);
+                levyFlightUpdate(swarm[i], gbest_position, omega, c1, c2, lb, ub, local_rng);
                 break;
                 
             case PSOVariant::ADAPTIVE:
                 // Use standard update with adaptive parameters
                 standardPSOUpdate(swarm[i], neighborhood_best,
-                                omega, c1, c2, lb, ub);
+                                omega, c1, c2, lb, ub, local_rng);
                 break;
                 
             case PSOVariant::HYBRID:
                 // Combine strategies based on success rate
-                if (swarm[i].success_rate < 0.3 && uniform_dist_(rng_) < 0.5) {
-                    levyFlightUpdate(swarm[i], gbest_position, omega, c1, c2, lb, ub);
-                } else if (swarm[i].success_rate > 0.7 && uniform_dist_(rng_) < 0.3) {
+                if (swarm[i].success_rate < 0.3 && local_uniform(local_rng) < 0.5) {
+                    levyFlightUpdate(swarm[i], gbest_position, omega, c1, c2, lb, ub, local_rng);
+                } else if (swarm[i].success_rate > 0.7 && local_uniform(local_rng) < 0.3) {
                     quantumPSOUpdate(swarm[i], gbest_position, mean_best_position,
-                                   iteration, lb, ub);
+                                   iteration, lb, ub, local_rng);
                 } else {
                     standardPSOUpdate(swarm[i], neighborhood_best,
-                                    omega, c1, c2, lb, ub);
+                                    omega, c1, c2, lb, ub, local_rng);
                 }
                 break;
         }
@@ -565,15 +597,17 @@ void ParticleSwarmOptimization::standardPSOUpdate(
     const Eigen::VectorXd& lbest_position,
     double omega, double c1, double c2,
     const std::vector<double>& lb,
-    const std::vector<double>& ub) {
+    const std::vector<double>& ub,
+    std::mt19937& rng) {
     
     int n = p.position.size();
+    std::uniform_real_distribution<> local_uniform(0.0, 1.0);
     
     // Generate random vectors
     Eigen::VectorXd r1(n), r2(n);
     for (int i = 0; i < n; ++i) {
-        r1[i] = uniform_dist_(rng_);
-        r2[i] = uniform_dist_(rng_);
+        r1[i] = local_uniform(rng);
+        r2[i] = local_uniform(rng);
     }
     
     // Velocity update with constriction factor option
@@ -612,12 +646,14 @@ void ParticleSwarmOptimization::quantumPSOUpdate(
     const Eigen::VectorXd& mean_best_position,
     int iteration,
     const std::vector<double>& lb,
-    const std::vector<double>& ub) {
+    const std::vector<double>& ub,
+    std::mt19937& rng) {
     
     int n = p.position.size();
+    std::uniform_real_distribution<> local_uniform(0.0, 1.0);
     
     // Calculate attractor point (weighted average of pbest and gbest)
-    double phi = uniform_dist_(rng_);
+    double phi = local_uniform(rng);
     Eigen::VectorXd attractor = phi * p.pbest_position + 
                                (1 - phi) * gbest_position;
     
@@ -626,13 +662,13 @@ void ParticleSwarmOptimization::quantumPSOUpdate(
     
     // Update position using quantum behavior
     for (int k = 0; k < n; ++k) {
-        double u = uniform_dist_(rng_);
+        double u = local_uniform(rng);
         
         // Characteristic length
         double L = 2.0 * beta * std::abs(mean_best_position[k] - p.position[k]);
         
         // Quantum position update
-        if (uniform_dist_(rng_) < 0.5) {
+        if (local_uniform(rng) < 0.5) {
             p.position[k] = attractor[k] + L * std::log(1.0 / u);
         } else {
             p.position[k] = attractor[k] - L * std::log(1.0 / u);
@@ -651,16 +687,19 @@ void ParticleSwarmOptimization::levyFlightUpdate(
     const Eigen::VectorXd& gbest_position,
     double omega, double c1, double c2,
     const std::vector<double>& lb,
-    const std::vector<double>& ub) {
+    const std::vector<double>& ub,
+    std::mt19937& rng) {
     
     // First perform standard PSO update
-    standardPSOUpdate(p, gbest_position, omega, c1, c2, lb, ub);
+    standardPSOUpdate(p, gbest_position, omega, c1, c2, lb, ub, rng);
     
+    std::uniform_real_distribution<> local_uniform(0.0, 1.0);
+
     // Apply Lévy flight with adaptive probability
     double levy_prob = 0.1 * (1.0 + p.success_rate);
-    if (uniform_dist_(rng_) < levy_prob) {
+    if (local_uniform(rng) < levy_prob) {
         int n = p.position.size();
-        Eigen::VectorXd levy_step = generateLevyVector(n);
+        Eigen::VectorXd levy_step = generateLevyVector(n, rng);
         
         // Adaptive step size based on search progress
         double step_scale = 0.01 * (1.0 - stagnation_counter_ / static_cast<double>(max_stagnation_));
@@ -770,11 +809,15 @@ void ParticleSwarmOptimization::restartSwarm(
         ub[k] = parameterManager.getUpperBoundForParamIndex(k);
     }
     
+    // Pre-generate seeds for thread safety
+    std::vector<unsigned int> seeds(swarm_size_);
+    for(int i=0; i<swarm_size_; ++i) seeds[i] = static_cast<unsigned int>(rng_());
+
     // Reinitialize remaining particles
     #pragma omp parallel for if(use_parallel_)
     for (int i = keep_best_count; i < swarm_size_; ++i) {
         // Thread-local RNG
-        std::mt19937 local_rng(rng_() + i);
+        std::mt19937 local_rng(seeds[i]);
         std::uniform_real_distribution<> local_uniform(0.0, 1.0);
         std::normal_distribution<> local_normal(0.0, 1.0);
         
@@ -923,17 +966,17 @@ std::vector<int> ParticleSwarmOptimization::getNeighbors(int particle_idx) {
     return neighbors;
 }
 
-Eigen::VectorXd ParticleSwarmOptimization::generateLevyVector(int dimension) {
+Eigen::VectorXd ParticleSwarmOptimization::generateLevyVector(int dimension, std::mt19937& rng) {
     Eigen::VectorXd levy_vector(dimension);
     
     for (int i = 0; i < dimension; ++i) {
-        levy_vector[i] = generateLevyNumber();
+        levy_vector[i] = generateLevyNumber(rng);
     }
     
     return levy_vector;
 }
 
-double ParticleSwarmOptimization::generateLevyNumber() {
+double ParticleSwarmOptimization::generateLevyNumber(std::mt19937& rng) {
     // Mantegna's algorithm for Lévy distribution
     double sigma_u = std::pow(
         std::tgamma(1 + levy_alpha_) * std::sin(M_PI * levy_alpha_ / 2) /
@@ -941,13 +984,21 @@ double ParticleSwarmOptimization::generateLevyNumber() {
          std::pow(2, (levy_alpha_ - 1) / 2)), 
         1.0 / levy_alpha_);
     
-    double u = normal_dist_(rng_) * sigma_u;
-    double v = std::abs(normal_dist_(rng_));
+    std::normal_distribution<> local_normal(0.0, 1.0);
+    double u = local_normal(rng) * sigma_u;
+    double v = std::abs(local_normal(rng));
     
     // Avoid division by very small numbers
     v = std::max(v, 1e-10);
     
-    return u / std::pow(v, 1.0 / levy_alpha_);
+    double levy_step = u / std::pow(v, 1.0 / levy_alpha_);
+    
+    // Clamp the Lévy step to prevent explosive step sizes
+    // Typical values should be within a reasonable range (e.g., [-100, 100])
+    const double max_levy_magnitude = 100.0;
+    levy_step = std::clamp(levy_step, -max_levy_magnitude, max_levy_magnitude);
+    
+    return levy_step;
 }
 
 Eigen::VectorXd ParticleSwarmOptimization::calculateMeanBestPosition(

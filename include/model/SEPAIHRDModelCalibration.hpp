@@ -12,7 +12,7 @@
 #include "sir_age_structured/interfaces/IOdeSolverStrategy.hpp"
 #include "sir_age_structured/interfaces/ISimulationCache.hpp"
 #include "sir_age_structured/caching/SimulationCache.hpp"      
-#include "sir_age_structured/solvers/Dropri5SolverStrategy.hpp"
+#include "sir_age_structured/solvers/Dopri5SolverStrategy.hpp"
 #include "sir_age_structured/optimizers/HillClimbingOptimizer.hpp"
 #include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
 #include "model/AgeSEPAIHRDModel.hpp"

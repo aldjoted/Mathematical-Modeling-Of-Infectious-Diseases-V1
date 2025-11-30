@@ -1,62 +1,46 @@
 # --- START OF FILE mcmc_settings.txt ---
-# Configuration for calibrating the AgeSEPAIHRDModel.
-# These settings are tuned for a complex, high-dimensional model
-# requiring a long run for proper convergence and posterior exploration.
-# For boolean flags, use 1.0 for true and 0.0 for false.
+# Configuration for Metropolis-Hastings Sampler with Simulated Annealing
+#
+# This sampler uses:
+# 1. Random Step All: Correlated perturbation of all parameters (Adaptive Metropolis)
+# 2. Random Step One: Axis-aligned perturbation of a single parameter
+# 3. Simulated Annealing: Accepts worse solutions with probability exp(deltaL / T)
+# 4. Adaptive Covariance: Learns parameter correlations during sampling
 
 # --- Core MCMC Settings ---
-# A long burn-in period is essential for the sampler to find the high-probability
-# region of the posterior and for the adaptive step-size to stabilize.
-burn_in 50000
 
-# A large number of post-burn-in iterations are needed to generate a sufficient
-# number of samples for accurate posterior analysis.
-mcmc_iterations 200000
+# mcmc_iterations: Total number of MCMC iterations.
+# Default: 5000
+mcmc_iterations 10000
 
-# Thinning reduces autocorrelation between saved samples and saves disk space.
-# A value of 20 means we save 1 sample for every 20 generated (10,000 total samples).
-thinning 2000
+# thinning: Save 1 sample for every N iterations to reduce autocorrelation.
+# Default: 1 (save all)
+thinning 50
 
-# Report progress less frequently for long runs to avoid cluttering the log.
-report_interval 10
+# report_interval: Frequency (in iterations) for logging progress and checkpointing.
+# Default: 100
+report_interval 100
 
-# Calculating the posterior mean is a good practice to find a single best-fit set.
-calculate_posterior_mean 1.0
+# --- Simulated Annealing Parameters ---
 
-# --- Performance & Parallelization Settings ---
-# Enable parallel evaluation. This is CRITICAL for performance with a slow
-# objective function, especially when refinement is enabled.
-mcmc_enable_parallel 0.0
+# sa_initial_temp: Starting temperature for annealing.
+# Higher values allow more exploration of worse solutions initially.
+# Default: 100.0
+sa_initial_temp 100
 
-# Adjust to the number of available CPU cores on your machine. 8 is a good start.
-mcmc_num_threads 4
+# sa_cooling_rate: Geometric cooling factor applied each iteration (T *= cooling_rate).
+# Values close to 1.0 = slow cooling, values close to 0.9 = fast cooling.
+# Default: 0.999
+sa_cooling_rate 0.9999
 
-# Vectorized proposal generation is generally efficient.
-mcmc_enable_vectorization 1.0
+# step_all_prob: Probability of using 'Step All' (global correlated move) vs 'Step One' (local move).
+# Higher values favor global exploration, lower values favor local refinement.
+# Default: 0.4 (40% global, 60% local)
+step_all_prob 0.4
 
-# --- Proposal & Refinement Strategy ---
-# The initial step size. With adaptation enabled, this is less critical, but a
-# smaller value is a safer start for a high-dimensional problem.
-mcmc_step_size 0.01
+# --- Parallel Candidate Cloud ---
 
-# Enable proposal refinement. This costs more evaluations per step but can
-# drastically improve acceptance rates and overall convergence speed for
-# complex posterior geometries. Highly recommended for this model.
-mcmc_enable_refinement 1.0
-
-# Number of refinement steps. 5 is a reasonable default.
-mcmc_refinement_steps 5
-
-# --- Adaptive Sampling Settings ---
-# Enable adaptive step-size. This is the most important feature for a complex
-# model, as it automatically tunes the sampler for optimal performance.
-mcmc_adaptive_step 1.0
-
-# The target acceptance rate. For high-dimensional problems, a rate around 0.234
-# is theoretically optimal. The previous value of 0.44 is better for low-d problems.
-mcmc_target_acceptance 0.234
-
-# The learning rate for the adaptation. 0.05 is a robust default.
-mcmc_adaptation_rate 0.05
-
-# --- END OF FILE mcmc_settings.txt ---
+# cloud_size_multiplier: Cloud size = num_threads * multiplier.
+# Higher values generate more candidates per iteration for aggressive exploration.
+# Default: 2
+cloud_size_multiplier 2

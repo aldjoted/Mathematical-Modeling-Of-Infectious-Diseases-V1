@@ -36,9 +36,14 @@ This C++ project implements and calibrates an age-structured deterministic compa
     *   Flexible simulation engine for running models over time.
     *   Support for various ODE solver strategies (e.g., Dopri5, Cash-Karp, Fehlberg).
 *   **Calibration Framework:**
-    *   Bayesian calibration using MCMC (Metropolis-Hastings).
+    *   Bayesian calibration using MCMC (Metropolis-Hastings) and NUTS (No-U-Turn Sampler).
     *   Optimization algorithms (e.g., Particle Swarm Optimization, Hill Climbing) for finding initial parameters.
     *   Objective functions (e.g., Poisson likelihood).
+*   **Post-Calibration Analysis (Refactored Architecture):**
+    *   Modular component-based design with dependency injection
+    *   Performance optimizations: simulation caching (~2x speedup), asynchronous I/O (150x faster), in-memory aggregation (3-5x faster)
+    *   Comprehensive analysis: posterior predictive checks, scenario analysis, validation against external data
+    *   Interface-based design enabling unit testing and mocking
 *   **Modular Design:**
     *   Uses interfaces for models, ODE solvers, optimization algorithms, parameter managers, and objective functions, promoting extensibility.
     *   Includes utility classes for file operations, CSV parsing, data handling, and logging.
@@ -124,10 +129,15 @@ The project is organized as follows:
     *   `data/processed/`: Contains data that has undergone pre-processing steps, ready for model input or analysis (e.g., `processed_data.csv`).
     *   `data/raw/`: Contains original, unaltered data obtained from various sources. This might include publicly available datasets on COVID-19 cases, hospitalizations, deaths, and demographic information for Spain.
 *   `docs/`: Contains additional documentation. This may include Doxygen-generated API documentation, detailed model descriptions, calibration methodology explanations, or design documents outlining the software architecture.
+    *   `docs/REFACTORING_SUMMARY.md`: Comprehensive documentation of the PostCalibrationAnalyser refactoring, including architecture, performance benchmarks, and usage examples.
+    *   `docs/REFACTORING_CHECKLIST.md`: Task inventory and integration guide for the refactoring.
+    *   `docs/INTEGRATION_COMPLETE.md`: Final integration status and build results.
 *   `include/`: Contains header files (`.hpp`) for the C++ source code.
     *   `include/base/`: Header files for base SIR models.
     *   `include/exceptions/`: Custom exception classes.
     *   `include/model/`: Header files for the SEPAIHRD model and related components (parameters, objectives, optimizers).
+        *   `include/model/interfaces/`: Interface definitions for modular components (ISimulationRunner, IMetricsCalculator, IAnalysisWriter, IResultAggregator).
+        *   `include/model/AnalysisTypes.hpp`: POD structures for data transfer between components.
     *   `include/sir_age_structured/`: Header files for the age-structured SIR model and related components.
     *   `include/utils/`: Utility class headers (e.g., [`FileUtils.hpp`](include/utils/FileUtils.hpp), [`Logger.hpp`](include/utils/Logger.hpp), CSV parsing).
 *   `scripts/`: Contains utility scripts, possibly for data processing, visualization, or running batches of simulations. See [Scripts Section](#scripts) for more details.
@@ -141,6 +151,7 @@ The project is organized as follows:
         *   `src/base/docs/`: Markdown documentation for the base models.
     *   `src/exceptions/`: Source files for custom exception classes.
     *   `src/model/`: Source files for the SEPAIHRD model, including its main executable (`main.cpp`), objectives, optimizers, and parameter management.
+        *   Modular post-calibration analysis components: `SimulationRunner.cpp`, `MetricsCalculator.cpp`, `AnalysisWriter.cpp`, `ResultAggregator.cpp`.
     *   `src/sir_age_structured/`: Source files for the age-structured SIR model, including its main executable (`main.cpp`), calibration demo, objectives, optimizers, etc.
     *   `src/utils/`: Utility class implementations.
 *   `tests/`: Contains unit tests for the project, using the Google Test framework.
@@ -164,7 +175,10 @@ Executables are built into the `build/bin/` directory.
     *   `--algorithm <name>` or `-a <name>`: Choose calibration algorithm.
         *   `pso` or `psomcmc`: Particle Swarm Optimization followed by MCMC (default).
         *   `hill` or `hillmcmc`: Hill Climbing followed by MCMC.
+        *   `nuts`: No-U-Turn Sampler (NUTS) for gradient-based MCMC.
     *   `--help` or `-h`: Show help message.
+    
+    The executable performs model calibration followed by comprehensive post-calibration analysis using a modular, performance-optimized architecture.
 
 *   **Age-Structured SIR Model:**
     Run the main simulation:
@@ -215,7 +229,8 @@ The models and calibration routines rely on various input files, primarily locat
 *   **Calibration Outputs:**
     *   Stored in `data/calibration_output/`.
     *   `mcmc_summary.csv`: Contains summary statistics (mean, median, standard deviation, quantiles) for the posterior distributions of calibrated parameters and derived metrics.
-    *   Other files might include MCMC trace plots (if generated by scripts), posterior predictive check data, etc.
+    *   Posterior predictive check data, scenario analysis comparisons, and trajectory aggregations.
+    *   Other files might include MCMC trace plots (if generated by scripts), validation results, etc.
 *   **Log Files:**
     *   Application logs are printed to the console.
     *   File logging can be enabled via the [`Logger`](include/utils/Logger.hpp) class, typically to a file like `epidemic_model.log` in the execution directory.

@@ -199,15 +199,19 @@ TEST_F(CalibrationDataTest, GetInitialSEPAIHRDState_CorrectlyCalculates) {
         p_asymptomatic, h_hospitalization
     );
 
-    ASSERT_EQ(initial_state.size(), 9 * NUM_AGE_CLASSES);
+    ASSERT_EQ(initial_state.size(), 11 * NUM_AGE_CLASSES);
 
     // Test that the observable compartments match the data
     EXPECT_DOUBLE_EQ(initial_state(4 * NUM_AGE_CLASSES + 0), 5); 
     EXPECT_DOUBLE_EQ(initial_state(5 * NUM_AGE_CLASSES + 0), 2);  
     EXPECT_DOUBLE_EQ(initial_state(6 * NUM_AGE_CLASSES + 0), 1);  // ICU0_0 from cum_i0
     EXPECT_DOUBLE_EQ(initial_state(8 * NUM_AGE_CLASSES + 0), 0);  // D0_0 from cum_d0
+    
+    // Test that cumulative compartments are initialized from calibration data
+    EXPECT_DOUBLE_EQ(initial_state(9 * NUM_AGE_CLASSES + 0), 2);   // CumH0_0 from cum_h0
+    EXPECT_DOUBLE_EQ(initial_state(10 * NUM_AGE_CLASSES + 0), 1);  // CumICU0_0 from cum_i0
 
-    // Test population conservation for each age group
+    // Test population conservation for each age group (only compartments 0-8, not cumulative trackers)
     for (int age = 0; age < NUM_AGE_CLASSES; ++age) {
         double sum_comps = 0;
         for (int comp = 0; comp < 9; ++comp) {
@@ -328,7 +332,7 @@ TEST_F(CalibrationDataTest, GetInitialSEPAIHRDState_HandlesLargeInitialValuesCla
     EXPECT_LE(initial_state(6 * NUM_AGE_CLASSES + 0), 20);        // ICU0_0 should be clamped
     EXPECT_GE(initial_state(6 * NUM_AGE_CLASSES + 0), 0);         // ICU0_0 should be non-negative
 
-    // Test population conservation
+    // Test population conservation (only compartments 0-8, not cumulative trackers)
     for (int age = 0; age < NUM_AGE_CLASSES; ++age) {
         double sum_comps = 0;
         for (int comp = 0; comp < 9; ++comp) {

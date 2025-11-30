@@ -42,6 +42,7 @@ static void assignAgeVector(const std::string& name, const std::vector<double>& 
     else if (name == "icu") params.icu = vec;
     else if (name == "d_H") params.d_H = vec;
     else if (name == "d_ICU") params.d_ICU = vec;
+    else if (name == "d_community") params.d_community = vec;
 }
 
 
@@ -130,6 +131,9 @@ void saveCalibrationResults(const std::string &filename,
     writeAgeVectorParam("icu", meters.icu);
     writeAgeVectorParam("d_H", meters.d_H);
     writeAgeVectorParam("d_ICU", meters.d_ICU);
+    if (meters.d_community.size() > 0) {
+        writeAgeVectorParam("d_community", meters.d_community);
+    }
 
     file << std::endl << "# --- Initial State Multipliers ---" << std::endl;
     writeScalarParam("E0_multiplier", meters.E0_multiplier);
@@ -140,6 +144,8 @@ void saveCalibrationResults(const std::string &filename,
     writeScalarParam("ICU0_multiplier", meters.ICU0_multiplier);
     writeScalarParam("R0_multiplier", meters.R0_multiplier);
     writeScalarParam("D0_multiplier", meters.D0_multiplier);
+    writeScalarParam("runup_days", meters.runup_days);
+    writeScalarParam("seed_exposed", meters.seed_exposed);
 
     file << std::endl << "# --- NPI Strategy Parameters ---" << std::endl;
     file << "kappa_end_times";
@@ -171,6 +177,7 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
     params.icu = Eigen::VectorXd::Zero(num_age_classes);
     params.d_H = Eigen::VectorXd::Zero(num_age_classes);
     params.d_ICU = Eigen::VectorXd::Zero(num_age_classes);
+    params.d_community = Eigen::VectorXd::Zero(num_age_classes);
 
     std::string line;
     int line_number = 0;
@@ -233,9 +240,11 @@ epidemic::SEPAIHRDParameters readSEPAIHRDParameters(const std::string& filename,
         else if (param_name == "ICU0_multiplier") params.ICU0_multiplier = scalar_val;
         else if (param_name == "R0_multiplier") params.R0_multiplier = scalar_val;
         else if (param_name == "D0_multiplier") params.D0_multiplier = scalar_val;
+        else if (param_name == "runup_days") params.runup_days = scalar_val;
+        else if (param_name == "seed_exposed") params.seed_exposed = scalar_val;
         else if (param_name == "beta_end_times") params.beta_end_times = vector_val;
         else if (param_name == "kappa_end_times") params.kappa_end_times = vector_val;
-        else if (param_name == "a" || param_name == "h_infec" || param_name == "p" || param_name == "h" || param_name == "icu" || param_name == "d_H" || param_name == "d_ICU") {
+        else if (param_name == "a" || param_name == "h_infec" || param_name == "p" || param_name == "h" || param_name == "icu" || param_name == "d_H" || param_name == "d_ICU" || param_name == "d_community") {
             assignAgeVector(param_name, vector_val, params, num_age_classes);
         } else {
             epidemic::Logger::getInstance().warning("readSEPAIHRDParameters", "Unrecognized parameter '" + param_name + "' on line " + std::to_string(line_number));

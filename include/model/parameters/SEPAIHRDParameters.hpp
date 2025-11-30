@@ -107,6 +107,15 @@ struct SEPAIHRDParameters {
     /** @brief Multiplier for the initial number of deceased individuals (D0) */
     double D0_multiplier;
 
+    /** @brief Number of days before t=0 to start the simulation (run-up period) */
+    double runup_days = 30.0;
+
+    /** @brief Total number of exposed individuals to seed at t=-runup_days */
+    double seed_exposed = 10.0;
+
+    /** @brief Age-specific community/nursing home mortality rate (direct I->D) */
+    Eigen::VectorXd d_community;
+
     /**
      * @brief Validates that all parameter dimensions are consistent
      * @details Checks that all vector parameters have the same length as the population vector
@@ -122,6 +131,11 @@ struct SEPAIHRDParameters {
             icu.size() != num_age_classes || d_H.size() != num_age_classes ||
             d_ICU.size() != num_age_classes || a.size() != num_age_classes ||
             h_infec.size() != num_age_classes) {
+            return false;
+        }
+        
+        // d_community is optional - if present, must match age classes
+        if (d_community.size() > 0 && d_community.size() != num_age_classes) {
             return false;
         }
 

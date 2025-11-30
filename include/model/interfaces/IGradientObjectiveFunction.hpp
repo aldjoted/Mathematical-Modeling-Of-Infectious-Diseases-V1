@@ -2,6 +2,7 @@
 #define IGRADIENTOBJECTIVEFUNCTION_HPP
 
 #include "sir_age_structured/interfaces/IObjectiveFunction.hpp"
+#include <Eigen/Dense>
 
 namespace epidemic {
 
@@ -21,12 +22,12 @@ public:
     /**
      * @brief Evaluates the objective function (log-posterior) and its gradient.
      *
-     * @param params The vector of parameters at which to evaluate the function.
-     * @param grad A vector that will be filled with the gradient of the log-posterior
+     * @param params The Eigen vector of parameters at which to evaluate the function.
+     * @param grad An Eigen vector that will be filled with the gradient of the log-posterior
      * with respect to the parameters. The vector will be resized if necessary.
      * @return The value of the objective function (log-posterior).
      */
-    virtual double evaluate_with_gradient(const std::vector<double>& params, std::vector<double>& grad) const = 0;
+    virtual double evaluate_with_gradient(const Eigen::VectorXd& params, Eigen::VectorXd& grad) const = 0;
 };
 
 } // namespace epidemic

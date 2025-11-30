@@ -2,20 +2,20 @@
 #define SIMULATION_CACHE_HPP
 
 #include "sir_age_structured/interfaces/ISimulationCache.hpp"
-#include <unordered_map>
-#include <string>
-#include <map>
-#include <list>
 #include <vector>
+#include <string>
 #include <optional>
+#include <cstdint>
 #include <Eigen/Dense>
 #include <mutex>
 
 namespace epidemic {
 
 /**
- * @brief An implementation of ISimulationCache using LFU eviction with LRU tie-breaking.
- *        Optimized with Zobrist-style hashing for Eigen::VectorXd keys.
+ * @brief High-Performance SimulationCache using Structure of Arrays (SoA) and Open Addressing.
+ * Eliminates pointer chasing and dynamic allocations (std::list, std::unordered_map nodes).
+ * Optimized for cache locality and CPU pipelining.
+ * Thread-safe using a mutex.
  */
 class SimulationCache : public ISimulationCache {
 public:
@@ -30,35 +30,35 @@ public:
     void set(const Eigen::VectorXd& parameters, double result) override;
     void clear() override;
     size_t size() const override;
-    
-    // Note: This method name is kept for interface compatibility but now returns a stringified hash
+
     std::string createCacheKey(const Eigen::VectorXd& parameters) const override;
     
-    // Overloaded for direct hash access (internal optimization)
+    // Internal optimized hash computation
     size_t computeHash(const Eigen::VectorXd& parameters) const;
 
     bool getLikelihood(const std::string& key, double& value) override;
     void storeLikelihood(const std::string& key, double value) override;
 
 private:
-    // Structure of Arrays (SoA) for cache locality and SIMD friendliness
+    // Structure of Arrays (SoA) layout for cache locality
+    std::vector<size_t> keys_;           // Stores hash keys
+    std::vector<double> values_;         // Stores cached results
+    std::vector<uint32_t> frequencies_;  // Stores access frequencies (for LFU)
+    std::vector<uint32_t> timestamps_;   // Stores access timestamps (for LRU tie-breaking)
+    std::vector<bool> occupied_;         // Validity mask
+
     size_t capacity_;
     size_t count_;
-    uint32_t current_tick_;
+    mutable uint32_t current_tick_; // Global counter for LRU
+    mutable std::mutex mutex_;      // Mutex for thread safety
 
-    std::vector<size_t> keys_;
-    std::vector<double> values_;
-    std::vector<uint32_t> frequencies_;
-    std::vector<uint32_t> timestamps_;
-    std::vector<uint8_t> occupied_; // Changed from vector<bool> to vector<uint8_t> for raw pointer access and performance
-
+    // Open addressing parameters
     static constexpr size_t EMPTY_KEY = 0;
-
-    // Helper methods for Open Addressing
+    
+    // Internal helper to find index
     size_t findIndex(size_t key) const;
+    // Internal helper to handle eviction
     size_t evict();
-
-    mutable std::mutex mutex_;
 };
 
 } // namespace epidemic

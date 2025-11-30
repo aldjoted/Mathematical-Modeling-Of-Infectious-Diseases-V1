@@ -47,6 +47,13 @@ public:
      */
     void updateModelParameters(const Eigen::VectorXd& parameters) override;
     /**
+     * @brief Updates a specific model instance's parameters with the given values.
+     * This allows updating a cloned model for thread-safe parallel execution.
+     * @param parameters An Eigen::VectorXd containing the new parameter values.
+     * @param target_model The model instance to update.
+     */
+    void updateModelParameters(const Eigen::VectorXd& parameters, std::shared_ptr<AgeSEPAIHRDModel> target_model);
+    /**
      * @brief Gets the names of the parameters being managed.
      * @return A constant reference to a vector of strings containing parameter names.
      * @see IParameterManager::getParameterNames()
@@ -88,6 +95,18 @@ public:
      * @return double The upper bound.
      */
     virtual double getUpperBoundForParamIndex(int idx) const;
+
+    /**
+     * @brief Get the proposal sigmas map.
+     * @return const reference to the proposal sigmas map.
+     */
+    const std::map<std::string, double>& getProposalSigmas() const { return proposal_sigmas_; }
+
+    /**
+     * @brief Get the parameter bounds map.
+     * @return const reference to the parameter bounds map.
+     */
+    const std::map<std::string, std::pair<double, double>>& getParamBounds() const { return param_bounds_; }
 
 
 private:

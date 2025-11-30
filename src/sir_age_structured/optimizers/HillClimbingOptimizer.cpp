@@ -1,311 +1,326 @@
 #include "sir_age_structured/optimizers/HillClimbingOptimizer.hpp"
 #include "utils/Logger.hpp"
-#include <algorithm>
-#include <cmath>
+#include <Eigen/Cholesky>
+#include <Eigen/StdVector>  // Required for aligned_allocator with Eigen types
+#include <iostream>
 #include <iomanip>
-#include <sstream>
+#include <cmath>
 #include <limits>
+#include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace epidemic {
 
-HillClimbingOptimizer::HillClimbingOptimizer()
-    : gen_{std::random_device{}()} {}
+    static Logger& logger = Logger::getInstance();
+    static const std::string LOG_SOURCE = "HILL_CLIMBING";
 
-void HillClimbingOptimizer::configure(const std::map<std::string, double>& settings) {
-    auto get = [&](const std::string& key, double def) {
-        auto it = settings.find(key);
-        return it != settings.end() ? it->second : def;
-    };
-
-    iterations_            = static_cast<int>(get("iterations", iterations_));
-    initial_step_coef_     = get("initial_step", initial_step_coef_);
-    cooling_rate_          = get("cooling_rate", cooling_rate_);
-    refinement_steps_      = static_cast<int>(get("refinement_steps", refinement_steps_));
-    burnin_factor_         = get("burnin_factor", burnin_factor_);
-    burnin_step_increase_  = get("burnin_step_increase", burnin_step_increase_);
-    post_burnin_step_coef_ = get("post_burnin_step_coef", post_burnin_step_coef_);
-    one_param_step_coef_   = get("one_param_step_coef", one_param_step_coef_);
-    min_step_coef_         = get("min_step_coef", min_step_coef_);
-    report_interval_       = static_cast<int>(get("report_interval", report_interval_));
-    restart_interval_      = static_cast<int>(get("restart_interval", restart_interval_));
-    restart_resets_step_   = get("restart_resets_step", 1.0) != 0.0;
-    enable_bidirectional_  = get("enable_bidirectional", 1.0) != 0.0;
-    enable_elongation_     = get("enable_elongation", 1.0) != 0.0;
-
-    // Validate parameters
-    iterations_            = std::max(iterations_, 1);
-    initial_step_coef_     = std::max(initial_step_coef_, 1e-6);
-    cooling_rate_          = std::clamp(cooling_rate_, 0.001, 0.999);
-    refinement_steps_      = std::max(refinement_steps_, 0);
-    burnin_factor_         = std::clamp(burnin_factor_, 0.0, 1.0);
-    min_step_coef_         = std::max(min_step_coef_, 1e-12);
-    report_interval_       = std::max(report_interval_, 1);
-
-    Logger::getInstance().info("HillClimbingOptimizer", 
-        "Configured with bidirectional=" + std::to_string(enable_bidirectional_) +
-        ", elongation=" + std::to_string(enable_elongation_) +
-        ", refinement_steps=" + std::to_string(refinement_steps_));
-}
-
-OptimizationResult HillClimbingOptimizer::optimize(
-    const Eigen::VectorXd& initialParameters,
-    IObjectiveFunction& objectiveFunction,
-    IParameterManager& parameterManager) {
-    
-    const std::string F_NAME = "HillClimbingOptimizer::optimize";
-    Logger::getInstance().info(F_NAME, "Starting optimization with " + 
-                              std::to_string(iterations_) + " iterations");
-
-    OptimizationResult result;
-    result.bestParameters = initialParameters;
-    result.bestObjectiveValue = objectiveFunction.calculate(initialParameters);
-
-    if (!std::isfinite(result.bestObjectiveValue)) {
-        Logger::getInstance().warning(F_NAME, "Invalid initial objective value");
-        result.bestObjectiveValue = -std::numeric_limits<double>::infinity();
-    }
-
-    Eigen::VectorXd current = initialParameters;
-    double currentObjective = result.bestObjectiveValue;
-    double stepCoef = initial_step_coef_;
-    int burnin_iters = static_cast<int>(iterations_ * burnin_factor_);
-    int accepted = 0;
-    int improved = 0;
-
-    for (int iter = 1; iter <= iterations_; ++iter) {
-        // Handle restarts
-        if (restart_interval_ > 0 && iter % restart_interval_ == 0) {
-            Logger::getInstance().info(F_NAME, "Restarting from best parameters at iteration " + 
-                                     std::to_string(iter));
-            current = result.bestParameters;
-            currentObjective = result.bestObjectiveValue;
-            if (restart_resets_step_) {
-                stepCoef = initial_step_coef_;
-            }
-        }
-
-        // Perform optimized step
-        auto stepResult = performOptimizedStep(
-            current, currentObjective, iter, objectiveFunction, parameterManager);
-
-        if (stepResult.valid && stepResult.objective > currentObjective) {
-            current = stepResult.parameters;
-            currentObjective = stepResult.objective;
-            accepted++;
-
-            if (currentObjective > result.bestObjectiveValue) {
-                result.bestObjectiveValue = currentObjective;
-                result.bestParameters = current;
-                improved++;
-                Logger::getInstance().info(F_NAME, 
-                    "New best at iteration " + std::to_string(iter) + 
-                    ": " + std::to_string(currentObjective));
-            }
-        }
-
-        // Cool down step size
-        if (iter > burnin_iters) {
-            stepCoef = std::max(stepCoef * cooling_rate_, min_step_coef_);
-        }
-
-        // Progress reporting
-        if (iter % report_interval_ == 0 || iter == iterations_) {
-            double acceptRate = 100.0 * accepted / iter;
-            Logger::getInstance().info(F_NAME, 
-                "Iteration " + std::to_string(iter) + "/" + std::to_string(iterations_) +
-                ", Current: " + std::to_string(currentObjective) +
-                ", Best: " + std::to_string(result.bestObjectiveValue) +
-                ", Accept rate: " + std::to_string(acceptRate) + "%" +
-                ", Step coef: " + std::to_string(stepCoef));
+    // --- Helper: Safe Evaluation ---
+    // Wraps the objective function to handle NaN/Inf gracefully.
+    // NOTE: Thread safety is ensured by the implementations:
+    //   - IObjectiveFunction::calculate() clones internal model state
+    //   - IParameterManager::applyConstraints() is const and read-only
+    static double safe_evaluate(IObjectiveFunction& func, const Eigen::VectorXd& p) {
+        try {
+            double val = func.calculate(p);
+            if (std::isnan(val) || std::isinf(val)) return -1e18; 
+            return val;
+        } catch (...) { 
+            return -1e18; 
         }
     }
 
-    Logger::getInstance().info(F_NAME, 
-        "Optimization complete. Accepted: " + std::to_string(accepted) + "/" + 
-        std::to_string(iterations_) + ", Improved: " + std::to_string(improved));
-
-    return result;
-}
-
-HillClimbingOptimizer::EvaluationResult HillClimbingOptimizer::performOptimizedStep(
-    const Eigen::VectorXd& currentParams,
-    double currentObjective,
-    int iteration,
-    IObjectiveFunction& objectiveFunction,
-    IParameterManager& parameterManager) {
-    
-    int burnin_iters = static_cast<int>(iterations_ * burnin_factor_);
-    bool in_burnin = iteration <= burnin_iters;
-    
-    // Determine step type and coefficient
-    double stepCoef;
-    Eigen::VectorXd stepDirection;
-    
-    if (iteration == 1) {
-        // First iteration: use burn-in start coefficient
-        stepCoef = burnin_step_increase_;
-        stepDirection = generateStepAll(1.0, parameterManager);
-    } else if (in_burnin || iteration % 2 == 0) {
-        // All parameters
-        stepCoef = in_burnin ? burnin_step_increase_ : post_burnin_step_coef_;
-        stepDirection = generateStepAll(1.0, parameterManager);
-    } else {
-        // One parameter
-        stepCoef = one_param_step_coef_;
-        stepDirection = generateStepOne(1.0, parameterManager);
-    }
-
-    // Try forward direction
-    Eigen::VectorXd candidateParams = currentParams + stepCoef * stepDirection;
-    auto forwardResult = evaluateParameters(candidateParams, objectiveFunction, parameterManager);
-    
-    EvaluationResult bestResult = forwardResult;
-    bool improved = forwardResult.valid && forwardResult.objective > currentObjective;
-
-    // Try reverse direction if enabled and forward didn't improve
-    if (enable_bidirectional_ && !improved) {
-        candidateParams = currentParams - stepCoef * stepDirection;
-        auto reverseResult = evaluateParameters(candidateParams, objectiveFunction, parameterManager);
+    // --- Helper: Robust Adaptive Line Search ---
+    // Phase 1: Backtracking (Safety) - Find any valid improvement with progressively smaller steps
+    // Phase 2: Expansion (Speed) - Accelerate along the successful ridge using moving anchor
+    static bool performRobustLineSearch(
+        Eigen::VectorXd& current_params, 
+        double& current_logL,
+        const Eigen::VectorXd& direction, 
+        IObjectiveFunction& func, 
+        IParameterManager& pm) 
+    {
+        // Tuning constants
+        const double shrinkage = 0.5;
+        const double growth = 1.5;
+        const int max_backtrack = 10;
+        const int max_expansion = 10;
         
-        if (reverseResult.valid && reverseResult.objective > currentObjective) {
-            bestResult = reverseResult;
-            stepDirection = -stepDirection;
-            improved = true;
-        }
-    }
-
-    // If we found improvement, try elongation and refinement
-    if (improved) {
-        // Elongate successful step
-        if (enable_elongation_) {
-            auto elongResult = elongateStep(
-                bestResult.parameters, stepDirection, bestResult.objective,
-                stepCoef, objectiveFunction, parameterManager);
+        // --- Phase 1: Find ANY Valid Improvement (Backtracking) ---
+        double step = 1.0;
+        Eigen::VectorXd improved_params = current_params;
+        double improved_logL = current_logL;
+        bool found_improvement = false;
+        
+        // Try progressively smaller steps to find a foothold
+        for (int i = 0; i < max_backtrack; ++i) {
+            Eigen::VectorXd candidate = pm.applyConstraints(current_params + direction * step);
             
-            if (elongResult.valid && elongResult.objective > bestResult.objective) {
-                bestResult = elongResult;
-            }
-        }
+            // Early exit: If step is too small to make a difference, stop.
+            if ((candidate - current_params).squaredNorm() < 1e-16) break;
 
-        // Binary refinement
-        if (refinement_steps_ > 0) {
-            auto refineResult = binaryRefinement(
-                bestResult.parameters, stepDirection, bestResult.objective,
-                stepCoef, refinement_steps_, objectiveFunction, parameterManager);
+            double candidate_logL = safe_evaluate(func, candidate);
             
-            if (refineResult.valid && refineResult.objective > bestResult.objective) {
-                bestResult = refineResult;
+            if (candidate_logL > improved_logL) {
+                improved_params = candidate;
+                improved_logL = candidate_logL;
+                found_improvement = true;
+                break;  // Found a foothold, move to expansion
             }
+            step *= shrinkage;
         }
-    }
-
-    return bestResult;
-}
-
-HillClimbingOptimizer::EvaluationResult HillClimbingOptimizer::elongateStep(
-    const Eigen::VectorXd& baseParams,
-    const Eigen::VectorXd& stepDirection,
-    double baseObjective,
-    double stepCoef,
-    IObjectiveFunction& objectiveFunction,
-    IParameterManager& parameterManager) {
-    
-    EvaluationResult result{baseParams, baseObjective, true};
-    
-    // Keep extending in the successful direction
-    while (true) {
-        Eigen::VectorXd extendedParams = result.parameters + stepCoef * stepDirection;
-        auto extendedResult = evaluateParameters(extendedParams, objectiveFunction, parameterManager);
         
-        if (extendedResult.valid && extendedResult.objective > result.objective) {
-            result = extendedResult;
-        } else {
-            break; 
-        }
-    }
-    
-    return result;
-}
-
-HillClimbingOptimizer::EvaluationResult HillClimbingOptimizer::binaryRefinement(
-    const Eigen::VectorXd& baseParams,
-    const Eigen::VectorXd& stepDirection,
-    double baseObjective,
-    double initialStepCoef,
-    int numSteps,
-    IObjectiveFunction& objectiveFunction,
-    IParameterManager& parameterManager) {
-    
-    EvaluationResult result{baseParams, baseObjective, true};
-    double alpha = initialStepCoef;
-    
-    for (int k = 0; k < numSteps; ++k) {
-        alpha *= 0.5;  // Halve the step size
+        if (!found_improvement) return false;
         
-        // Try both directions
-        for (int sign : {-1, 1}) {
-            Eigen::VectorXd refinedParams = result.parameters + sign * alpha * stepDirection;
-            auto refinedResult = evaluateParameters(refinedParams, objectiveFunction, parameterManager);
+        // --- Phase 2: Incremental Expansion (Crawler Strategy) ---
+        // We calculate the effective vector that worked (handling constraints)
+        // and try to accelerate along that vector relative to the NEW point.
+        
+        Eigen::VectorXd best_params = improved_params;
+        double best_logL = improved_logL;
+        
+        // This captures the "slide" along boundaries if constraints were hit
+        Eigen::VectorXd current_step = (improved_params - current_params);
+        
+        for (int i = 0; i < max_expansion; ++i) {
+            // Grow the step size
+            current_step *= growth;
             
-            if (refinedResult.valid && refinedResult.objective > result.objective) {
-                result = refinedResult;
+            // Move relative to the *latest* best point (Moving Anchor)
+            Eigen::VectorXd candidate = pm.applyConstraints(best_params + current_step);
+            double candidate_logL = safe_evaluate(func, candidate);
+            
+            if (candidate_logL > best_logL) {
+                best_params = candidate;
+                best_logL = candidate_logL;
+                // Note: We update best_params, so the next iteration 
+                // steps off from this new, further point.
+            } else {
+                break;  // Overshot the peak/ridge
             }
         }
-    }
-    
-    return result;
-}
-
-HillClimbingOptimizer::EvaluationResult HillClimbingOptimizer::evaluateParameters(
-    const Eigen::VectorXd& params,
-    IObjectiveFunction& objectiveFunction,
-    IParameterManager& parameterManager) {
-    
-    // Apply constraints
-    Eigen::VectorXd constrainedParams = parameterManager.applyConstraints(params);
-    
-    // Evaluate objective
-    double objective = objectiveFunction.calculate(constrainedParams);
-    
-    bool valid = std::isfinite(objective);
-    if (!valid) {
-        objective = -std::numeric_limits<double>::infinity();
-    }
-    
-    return {constrainedParams, objective, valid};
-}
-
-Eigen::VectorXd HillClimbingOptimizer::generateStepAll(
-    double stepCoef, IParameterManager& parameterManager) {
-    
-    size_t paramCount = parameterManager.getParameterCount();
-    Eigen::VectorXd steps(paramCount);
-    
-    for (size_t i = 0; i < paramCount; ++i) {
-        double sigma = parameterManager.getSigmaForParamIndex(i);
-        std::normal_distribution<> dist(0.0, sigma * stepCoef);
-        steps[i] = dist(gen_);
-    }
-    
-    return steps;
-}
-
-Eigen::VectorXd HillClimbingOptimizer::generateStepOne(
-    double stepCoef, IParameterManager& parameterManager) {
-    
-    size_t paramCount = parameterManager.getParameterCount();
-    Eigen::VectorXd steps = Eigen::VectorXd::Zero(paramCount);
-    
-    if (paramCount > 0) {
-        std::uniform_int_distribution<> idxDist(0, paramCount - 1);
-        int idx = idxDist(gen_);
         
-        double sigma = parameterManager.getSigmaForParamIndex(idx);
-        std::normal_distribution<> dist(0.0, sigma * stepCoef);
-        steps[idx] = dist(gen_);
+        // Update state
+        current_params = best_params;
+        current_logL = best_logL;
+        return true;
     }
-    
-    return steps;
-}
+
+    // --- Class Implementation ---
+
+    HillClimbingOptimizer::HillClimbingOptimizer() {
+        gen_ = std::mt19937(std::random_device{}());
+    }
+
+    void HillClimbingOptimizer::configure(const std::map<std::string, double>& settings) {
+        auto get = [&](const std::string& key, double def) {
+            auto it = settings.find(key);
+            return (it != settings.end()) ? it->second : def;
+        };
+
+        iterations_ = static_cast<int>(get("iterations", 2000.0));
+        report_interval_ = static_cast<int>(get("report_interval", 100.0));
+        cloud_size_multiplier_ = std::max(1, static_cast<int>(get("cloud_size_multiplier", 8.0)));
+
+        logger.info(LOG_SOURCE, "Configured Parallel Hill Climber: Iterations=" + std::to_string(iterations_) +
+                    ", CloudMultiplier=" + std::to_string(cloud_size_multiplier_));
+    }
+
+    OptimizationResult HillClimbingOptimizer::optimize(
+        const Eigen::VectorXd& initialParameters,
+        IObjectiveFunction& objectiveFunction,
+        IParameterManager& parameterManager) {
+
+        OptimizationResult result;
+        result.bestParameters = initialParameters;
+        result.bestObjectiveValue = safe_evaluate(objectiveFunction, initialParameters);
+        
+        Eigen::VectorXd current_params = initialParameters;
+        double current_logL = result.bestObjectiveValue;
+        int n_params = static_cast<int>(initialParameters.size());
+
+        // --- 1. Adaptive Covariance Initialization ---
+        // Initialize diagonal covariance from parameter sigmas (heuristics)
+        Eigen::MatrixXd cov = Eigen::MatrixXd::Identity(n_params, n_params);
+        for(int i=0; i<n_params; ++i) {
+             double s = parameterManager.getSigmaForParamIndex(i);
+             cov(i,i) = (s > 0 ? s*s : 1e-4);
+        }
+
+        // Pre-compute Cholesky decomposition for correlated sampling
+        Eigen::MatrixXd L = cov.llt().matrixL();
+
+        // --- 2. Dynamic Parallelism Setup ---
+        int available_threads = 1;
+        #ifdef _OPENMP
+        available_threads = omp_get_max_threads();
+        if (available_threads < 1) available_threads = 1;
+        #endif
+        
+        // Candidates per step: Scale with threads (e.g., 4 threads * 8 multiplier = 32 candidates)
+        const int num_candidates = std::max(4, available_threads * cloud_size_multiplier_);
+
+        logger.info(LOG_SOURCE, "Starting Parallel Search. Threads: " + std::to_string(available_threads) + 
+                                ", Cloud Size: " + std::to_string(num_candidates) +
+                                ", Initial LogL: " + std::to_string(result.bestObjectiveValue));
+
+        // --- 3. Main Optimization Loop ---
+        // NOTE: We do not save samples vector as requested for Phase 1.
+        
+        // History for covariance adaptation (store last 2 successful points to define vector)
+        Eigen::VectorXd prev_params = current_params;
+
+        // Random number generation setup - create properly seeded thread-local RNGs
+        // Use a master RNG to generate independent seeds for each thread
+        std::mt19937 master_gen(std::random_device{}());
+        std::vector<std::mt19937> thread_rngs(available_threads);
+        std::vector<std::normal_distribution<double>> thread_norms(available_threads);
+        for (int t = 0; t < available_threads; ++t) {
+            // Use seed_seq for proper initialization (better statistical independence)
+            std::seed_seq seed{master_gen(), master_gen(), master_gen(), master_gen()};
+            thread_rngs[t].seed(seed);
+            thread_norms[t] = std::normal_distribution<double>(0.0, 1.0);
+        }
+
+        for (int iter = 0; iter < iterations_; ++iter) {
+            
+            // A. Generate Candidate Cloud (Parallel)
+            // Mix of Global Correlated moves (using L) and Local Axis-Aligned moves
+            std::vector<Eigen::VectorXd> candidates(num_candidates);
+            std::vector<double> scores(num_candidates, -1e18);
+
+            #pragma omp parallel for num_threads(available_threads) schedule(static)
+            for(int i=0; i<num_candidates; ++i) {
+                #ifdef _OPENMP
+                int tid = omp_get_thread_num();
+                #else
+                int tid = 0;
+                #endif
+                std::mt19937& local_rng = thread_rngs[tid];
+                std::normal_distribution<double>& norm = thread_norms[tid];
+                
+                if (i < num_candidates / 2) {
+                    // Strategy 1: Correlated Global Move
+                    Eigen::VectorXd z(n_params);
+                    for(int k=0; k<n_params; ++k) z(k) = norm(local_rng);
+                    candidates[i] = L * z; 
+                } else {
+                    // Strategy 2: Axis-Aligned Local Move
+                    std::uniform_int_distribution<int> param_dist(0, n_params - 1);
+                    int idx = param_dist(local_rng);
+                    double sigma = std::sqrt(cov(idx, idx)); 
+                    candidates[i] = Eigen::VectorXd::Zero(n_params);
+                    candidates[i](idx) = sigma * norm(local_rng); 
+                }
+            }
+
+            // B. Parallel Evaluation
+            // Distribute the costly objective function calls across cores
+            #pragma omp parallel for num_threads(available_threads) schedule(dynamic)
+            for(int i=0; i<num_candidates; ++i) {
+                // Candidate vector represents the *step*, so add to current
+                Eigen::VectorXd p_test = parameterManager.applyConstraints(current_params + candidates[i]);
+                scores[i] = safe_evaluate(objectiveFunction, p_test);
+            }
+
+            // C. Winner Selection
+            int best_idx = -1;
+            double best_val = -1e18;
+            for(int i=0; i<num_candidates; ++i) {
+                if (scores[i] > best_val) {
+                    best_val = scores[i];
+                    best_idx = i;
+                }
+            }
+
+            // D. Robust Line Search
+            // If we found a valid candidate, try to exploit that direction
+            // Even if the cloud didn't improve, we try line search with backtracking
+            // because a smaller step might work (Phase 1 Backtracking).
+            bool moved = false;
+            if (best_idx != -1 && best_val > -1e18) {
+                moved = performRobustLineSearch(
+                    current_params, current_logL, candidates[best_idx], objectiveFunction, parameterManager
+                );
+            }
+
+            // E. Update & Adaptation
+            if (moved) {
+                if (current_logL > result.bestObjectiveValue) {
+                    result.bestObjectiveValue = current_logL;
+                    result.bestParameters = current_params;
+                }
+
+                // Covariance Update (Haario Adaptation)
+                // Use the vector of the actual move taken (current - prev)
+                Eigen::VectorXd actual_step = current_params - prev_params;
+                double step_norm = actual_step.squaredNorm();
+                
+                if (step_norm > 1e-14) {
+                    double alpha = 0.1; // Learning rate
+                    cov *= (1.0 - alpha);
+                    cov += alpha * (actual_step * actual_step.transpose());
+                    
+                    // Enforce minimum diagonal floor to prevent covariance collapse
+                    // This ensures a minimum exploration capability even when stuck
+                    for (int i = 0; i < n_params; ++i) {
+                        double min_var = parameterManager.getSigmaForParamIndex(i);
+                        min_var = (min_var > 0 ? min_var * min_var * 0.01 : 1e-8);  // 1% of original variance
+                        if (cov(i, i) < min_var) cov(i, i) = min_var;
+                    }
+                }
+                prev_params = current_params;
+            }
+
+            // F. Refresh Cholesky more frequently (every 10 iterations)
+            // Since N (parameters) is small, O(N³) Cholesky is negligible vs simulation cost
+            // This ensures L reflects recent covariance changes for efficient sampling
+            if (iter > 0 && iter % 10 == 0) {
+                // Ensure covariance is positive definite with adaptive regularization
+                Eigen::LLT<Eigen::MatrixXd> llt(cov);
+                if (llt.info() == Eigen::Success) {
+                    L = llt.matrixL();
+                } else {
+                    // Regularization: add jitter proportional to trace
+                    double lambda = 1e-6 * cov.trace() / n_params;
+                    int max_attempts = 5;
+                    bool regularized = false;
+                    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+                        cov += lambda * Eigen::MatrixXd::Identity(n_params, n_params);
+                        Eigen::LLT<Eigen::MatrixXd> llt_retry(cov);
+                        if (llt_retry.info() == Eigen::Success) {
+                            L = llt_retry.matrixL();
+                            regularized = true;
+                            break;
+                        }
+                        lambda *= 10.0;  // Increase jitter if still failing
+                    }
+                    // If all attempts fail, reset covariance to diagonal
+                    if (!regularized) {
+                        L = cov.diagonal().cwiseSqrt().asDiagonal();
+                        // Reset covariance off-diagonals to match L
+                        cov = cov.diagonal().asDiagonal();
+                        logger.warning(LOG_SOURCE, "Covariance reset to diagonal due to instability");
+                    }
+                }
+            }
+
+            // G. Logging
+            if ((iter + 1) % report_interval_ == 0) {
+                 logger.info(LOG_SOURCE, "Iter " + std::to_string(iter+1) + 
+                             " | Best LogL: " + std::to_string(result.bestObjectiveValue) +
+                             " | Current LogL: " + std::to_string(current_logL));
+            }
+        }
+
+        // Store the learned covariance for Phase 2 transfer
+        result.finalCovariance = cov;
+        logger.info(LOG_SOURCE, "Phase 1 complete. Learned covariance matrix stored for Phase 2 transfer.");
+
+        // Return only the best result (no samples history)
+        return result;
+    }
 
 } // namespace epidemic

@@ -50,7 +50,7 @@ SEPAIHRDParameterManager::SEPAIHRDParameterManager(
         if (param_bounds_.find(name) == param_bounds_.end()) {
             THROW_INVALID_PARAM("SEPAIHRDParameterManager", "Missing bounds for parameter: " + name);
         }
-        validate_age_param(name, "a_") || validate_age_param(name, "h_infec_") || validate_age_param(name, "p_") || validate_age_param(name, "h_") || validate_age_param(name, "icu_") || validate_age_param(name, "d_H_") || validate_age_param(name, "d_ICU_");
+        validate_age_param(name, "a_") || validate_age_param(name, "h_infec_") || validate_age_param(name, "p_") || validate_age_param(name, "h_") || validate_age_param(name, "icu_") || validate_age_param(name, "d_H_") || validate_age_param(name, "d_ICU_") || validate_age_param(name, "d_community_");
 
         if (name.rfind("beta_", 0) == 0) {
             try {
@@ -128,6 +128,16 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
         else if (name.rfind("icu_", 0) == 0) current_params_vec[i] = model_params_struct.icu(std::stoul(name.substr(4)));
         else if (name.rfind("d_H_", 0) == 0) current_params_vec[i] = model_params_struct.d_H(std::stoul(name.substr(4)));
         else if (name.rfind("d_ICU_", 0) == 0) current_params_vec[i] = model_params_struct.d_ICU(std::stoul(name.substr(6)));
+        else if (name.rfind("d_community_", 0) == 0) {
+            size_t idx = std::stoul(name.substr(12));
+            if (model_params_struct.d_community.size() > static_cast<Eigen::Index>(idx)) {
+                current_params_vec[i] = model_params_struct.d_community(idx);
+            } else {
+                current_params_vec[i] = 0.0;
+            }
+        }
+        else if (name == "seed_exposed") current_params_vec[i] = model_params_struct.seed_exposed;
+        else if (name == "runup_days") current_params_vec[i] = model_params_struct.runup_days;
         else if (name.rfind("kappa_", 0) == 0) {
             try {
                 size_t overall_kappa_idx = std::stoul(name.substr(6)) - 1;
@@ -147,16 +157,24 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
 }
 
 void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& parameters_from_optimizer) {
+    updateModelParameters(parameters_from_optimizer, model_);
+}
+
+void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& parameters_from_optimizer, std::shared_ptr<AgeSEPAIHRDModel> target_model) {
     if (static_cast<size_t>(parameters_from_optimizer.size()) != param_names_.size()) {
         THROW_INVALID_PARAM("SEPAIHRDParameterManager::updateModelParameters", "Parameter vector size mismatch.");
+    }
+
+    if (!target_model) {
+        THROW_INVALID_PARAM("SEPAIHRDParameterManager::updateModelParameters", "Target model is null.");
     }
 
     Eigen::VectorXd constrained_params = applyConstraints(parameters_from_optimizer);
     
     // Get a mutable copy of the model's current parameters
-    SEPAIHRDParameters updated_params = model_->getModelParameters();
+    SEPAIHRDParameters updated_params = target_model->getModelParameters();
     
-    auto npi_strat_base = model_->getNpiStrategy();
+    auto npi_strat_base = target_model->getNpiStrategy();
     PiecewiseConstantNpiStrategy* piecewise_npi_strat = nullptr;
     if (npi_strat_base) {
         piecewise_npi_strat = dynamic_cast<PiecewiseConstantNpiStrategy*>(npi_strat_base.get());
@@ -167,6 +185,15 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
     std::vector<double> collected_calibratable_npi_values;
     if (piecewise_npi_strat) {
         collected_calibratable_npi_values = piecewise_npi_strat->getCalibratableValues();
+        
+        // Validate size consistency
+        const size_t expected_count = piecewise_npi_strat->getNumCalibratableNpiParams();
+        if (collected_calibratable_npi_values.size() != expected_count) {
+            // Log a warning but continue - this indicates a potential configuration issue
+            std::cerr << "[Warning] SEPAIHRDParameterManager: NPI calibratable values size ("
+                      << collected_calibratable_npi_values.size() << ") does not match expected count ("
+                      << expected_count << "). This may indicate a configuration issue." << std::endl;
+        }
     }
 
     for (size_t i = 0; i < param_names_.size(); ++i) {
@@ -200,6 +227,17 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         else if (name.rfind("icu_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); updated_params.icu(idx) = value; }
         else if (name.rfind("d_H_", 0) == 0) { size_t idx = std::stoul(name.substr(4)); updated_params.d_H(idx) = value; }
         else if (name.rfind("d_ICU_", 0) == 0) { size_t idx = std::stoul(name.substr(6)); updated_params.d_ICU(idx) = value; }
+        else if (name.rfind("d_community_", 0) == 0) {
+            size_t idx = std::stoul(name.substr(12));
+            if (updated_params.d_community.size() == 0) {
+                updated_params.d_community = Eigen::VectorXd::Zero(target_model->getNumAgeClasses());
+            }
+            if (static_cast<Eigen::Index>(idx) < updated_params.d_community.size()) {
+                updated_params.d_community(idx) = value;
+            }
+        }
+        else if (name == "seed_exposed") { updated_params.seed_exposed = value; }
+        else if (name == "runup_days") { updated_params.runup_days = value; }
         else if (name == "E0_multiplier") { updated_params.E0_multiplier = value; }
         else if (name == "P0_multiplier") { updated_params.P0_multiplier = value; }
         else if (name == "A0_multiplier") { updated_params.A0_multiplier = value; }
@@ -233,12 +271,27 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
     // Set the full parameter struct back to the model.
     // The model's setModelParameters method is responsible for updating all internal state,
     // including re-initializing the beta_strategy_.
-    model_->setModelParameters(updated_params);
+    target_model->setModelParameters(updated_params);
 
     // If any NPI parameters were changed, update the NPI strategy object.
     // This is a direct modification of the strategy object held by the model.
     if (npi_values_need_update && piecewise_npi_strat) {
-        piecewise_npi_strat->setCalibratableValues(collected_calibratable_npi_values);
+        const size_t expected_count = piecewise_npi_strat->getNumCalibratableNpiParams();
+        
+        if (collected_calibratable_npi_values.size() == expected_count) {
+            piecewise_npi_strat->setCalibratableValues(collected_calibratable_npi_values);
+        } else {
+            // This should not happen if configuration is correct.
+            // Log error and throw exception rather than silently masking the issue.
+            std::cerr << "[Error] SEPAIHRDParameterManager: Cannot update NPI values. "
+                      << "Collected size (" << collected_calibratable_npi_values.size() 
+                      << ") does not match expected count (" << expected_count << ")." << std::endl;
+            THROW_INVALID_PARAM("SEPAIHRDParameterManager::updateModelParameters",
+                                "NPI values size mismatch: collected " + 
+                                std::to_string(collected_calibratable_npi_values.size()) +
+                                " but expected " + std::to_string(expected_count) +
+                                ". Check your params_to_calibrate configuration.");
+        }
     }
 }
 

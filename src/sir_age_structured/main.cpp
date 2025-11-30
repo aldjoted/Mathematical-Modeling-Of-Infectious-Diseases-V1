@@ -12,7 +12,7 @@
 #include "sir_age_structured/ModelFactory.hpp"
 #include "sir_age_structured/Simulator.hpp"
 #include "sir_age_structured/SimulationResult.hpp"
-#include "sir_age_structured/solvers/Dropri5SolverStrategy.hpp"
+#include "sir_age_structured/solvers/Dopri5SolverStrategy.hpp"
 #include "sir_age_structured/InterventionCallBack.hpp"
 #include "sir_age_structured/SimulationResultProcessor.hpp"
 #include "utils/FileUtils.hpp"

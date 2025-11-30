@@ -406,7 +406,8 @@ private:
         const Eigen::VectorXd& lbest_position,
         double omega, double c1, double c2,
         const std::vector<double>& lb,
-        const std::vector<double>& ub);
+        const std::vector<double>& ub,
+        std::mt19937& rng);
 
     /**
      * @brief Quantum-behaved PSO position update
@@ -420,6 +421,7 @@ private:
      * @param[in] iteration Current iteration for beta calculation
      * @param[in] lb Lower bounds for all parameters
      * @param[in] ub Upper bounds for all parameters
+     * @param[in,out] rng Random number generator
      */
     void quantumPSOUpdate(
         particle& p,
@@ -427,7 +429,8 @@ private:
         const Eigen::VectorXd& mean_best_position,
         int iteration,
         const std::vector<double>& lb,
-        const std::vector<double>& ub);
+        const std::vector<double>& ub,
+        std::mt19937& rng);
 
     /**
      * @brief PSO update enhanced with Lévy flights
@@ -442,13 +445,15 @@ private:
      * @param[in] c2 Social acceleration coefficient
      * @param[in] lb Lower bounds for all parameters
      * @param[in] ub Upper bounds for all parameters
+     * @param[in,out] rng Random number generator
      */
     void levyFlightUpdate(
         particle& p,
         const Eigen::VectorXd& gbest_position,
         double omega, double c1, double c2,
         const std::vector<double>& lb,
-        const std::vector<double>& ub);
+        const std::vector<double>& ub,
+        std::mt19937& rng);
 
     // ===== Diversity and Restart Methods =====
 
@@ -539,9 +544,10 @@ private:
      * for long-range exploration moves.
      * 
      * @param[in] dimension Size of the vector to generate
+     * @param[in,out] rng Random number generator
      * @return Vector of Lévy-distributed values
      */
-    Eigen::VectorXd generateLevyVector(int dimension);
+    Eigen::VectorXd generateLevyVector(int dimension, std::mt19937& rng);
 
     /**
      * @brief Generate a single Lévy-distributed random number
@@ -549,9 +555,10 @@ private:
      * Uses Mantegna's algorithm to generate Lévy stable distribution
      * samples with parameter alpha.
      * 
+     * @param[in,out] rng Random number generator
      * @return Single Lévy-distributed value
      */
-    double generateLevyNumber();
+    double generateLevyNumber(std::mt19937& rng);
 
     /**
      * @brief Calculate mean of all personal best positions

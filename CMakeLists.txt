@@ -71,11 +71,16 @@ set(EPIDEMIC_MODELS_SRCS
     src/model/PieceWiseConstantNPIStrategy.cpp
     src/model/parameters/SEPAIHRDParameterManager.cpp
     src/model/objectives/SEPAIHRDObjectiveFunction.cpp
+    src/model/objectives/SEPAIHRDGradientObjectiveFunction.cpp
     src/model/SEPAIHRDModelCalibration.cpp
     src/model/optimizers/ParticleSwarmOptimizer.cpp
     src/model/optimizers/NUTSSampler.cpp
     src/model/ReproductionNumberCalculator.cpp
     src/model/PostCalibrationAnalyser.cpp
+    src/model/SimulationRunner.cpp
+    src/model/MetricsCalculator.cpp
+    src/model/AnalysisWriter.cpp
+    src/model/ResultAggregator.cpp
     src/model/PiecewiseConstantParameterStrategy.cpp
 )
 set(EPIDEMIC_UTILS_SRCS

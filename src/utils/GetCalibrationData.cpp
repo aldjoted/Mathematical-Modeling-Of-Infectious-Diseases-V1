@@ -131,16 +131,22 @@ Eigen::VectorXd CalibrationData::getInitialSEPAIHRDState(
     double gamma_a,    
     double gamma_i,    
     const Eigen::VectorXd& p_asymptomatic, 
-    const Eigen::VectorXd& /*h_hospitalized  */
+    const Eigen::VectorXd& h_hospitalized
 ) const {
     if (n_data_points == 0) {
         throw std::runtime_error("Cannot get initial SEPAIHRD state: No data points loaded.");
+    }
+    if (p_asymptomatic.size() != num_age_classes) {
+        throw std::runtime_error("p_asymptomatic vector size mismatch with num_age_classes.");
+    }
+    if (h_hospitalized.size() != num_age_classes) {
+        throw std::runtime_error("h_hospitalization vector size mismatch with num_age_classes.");
     }
     if (cumulative_deaths.rows() == 0 || cumulative_icu.rows() == 0 || cumulative_hospitalizations.rows() == 0 || cumulative_confirmed_cases.rows() == 0) {
         throw std::runtime_error("Cannot get initial SEPAIHRD state: Required cumulative data matrices are empty.");
     }
     
-    int n_comps = 9; // S, E, P, A, I, H, ICU, R, D
+    int n_comps = 11; // S, E, P, A, I, H, ICU, R, D, CumH, CumICU
     Eigen::VectorXd initial_state = Eigen::VectorXd::Zero(n_comps * num_age_classes);
     const Eigen::VectorXd& N = getPopulationByAgeGroup();
 
@@ -148,6 +154,10 @@ Eigen::VectorXd CalibrationData::getInitialSEPAIHRDState(
     Eigen::VectorXd D0 = cumulative_deaths.row(0).cwiseMax(0.0);
     Eigen::VectorXd H0 = cumulative_hospitalizations.row(0).cwiseMax(0.0);
     Eigen::VectorXd ICU0 = cumulative_icu.row(0).cwiseMax(0.0);
+    
+    // Initialize cumulative compartments from observed data at t0
+    Eigen::VectorXd CumH0 = cumulative_hospitalizations.row(0).cwiseMax(0.0);
+    Eigen::VectorXd CumICU0 = cumulative_icu.row(0).cwiseMax(0.0);
 
     // === Step 2: Use cumulative confirmed cases as a proxy for total infections ===
     Eigen::VectorXd I0 = (cumulative_confirmed_cases.row(0).transpose() - D0).cwiseMax(0.0);
@@ -209,20 +219,28 @@ Eigen::VectorXd CalibrationData::getInitialSEPAIHRDState(
     initial_state.segment(1 * num_age_classes, num_age_classes) = E0;
     initial_state.segment(2 * num_age_classes, num_age_classes) = P0;
     initial_state.segment(3 * num_age_classes, num_age_classes) = A0;
+    
+    // === Step 5: Set cumulative compartments from observed data at t0 ===
+    // CumH and CumICU track total ever hospitalized/ICU'd, initialized from calibration data
+    initial_state.segment(9 * num_age_classes, num_age_classes) = CumH0;
+    initial_state.segment(10 * num_age_classes, num_age_classes) = CumICU0;
 
-    // === Step 5: Set Susceptible (S) as the remainder ===
+    // === Step 6: Set Susceptible (S) as the remainder ===
+    // Note: CumH and CumICU (indices 9, 10) are cumulative tracking compartments 
+    // and should NOT be included in the population balance
     for (int i = 0; i < num_age_classes; ++i) {
         double sum_non_S = 0;
-        for (int j = 1; j < n_comps; ++j) {
+        // Only sum compartments E, P, A, I, H, ICU, R, D (indices 1-8)
+        for (int j = 1; j < 9; ++j) {
             sum_non_S += initial_state(j * num_age_classes + i);
         }
         initial_state(i) = std::max(0.0, N(i) - sum_non_S);
     }
     
-    // Final sanity check
+    // Final sanity check (only check population compartments S, E, P, A, I, H, ICU, R, D)
     for (int i = 0; i < num_age_classes; ++i) {
-        double total_for_age = initial_state.col(0).segment(i, 1).sum();
-        for (int j=1; j<n_comps; ++j) {
+        double total_for_age = initial_state(i); // S
+        for (int j = 1; j < 9; ++j) {  // E, P, A, I, H, ICU, R, D
             total_for_age += initial_state(j * num_age_classes + i);
         }
         if (std::abs(total_for_age - N(i)) > 1e-6 * N(i)) {

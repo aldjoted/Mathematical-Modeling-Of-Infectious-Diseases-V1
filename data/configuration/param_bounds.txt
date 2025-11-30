@@ -1,91 +1,92 @@
-# --- START OF FILE param_bounds.txt ---
+# Parameter bounds - CALIBRATED R0
 
-# Parameter bounds for SEPAIHRD model calibration (Spain 2020)
-# Format: parameter_name lower_bound upper_bound
+# --- Time-varying Beta ---
+# Beta 1 (Pre-lockdown): Capped to prevent explosive unrealistic growth
+beta_1  0.35   0.9
+# Beta 2 (Lockdown)
+beta_2  0.05  0.35
+# Transitions
+beta_3  0.085   0.6
+beta_4  0.1   0.8
+beta_5  0.2   0.9
+beta_6  0.2   0.8
+beta_7  0.1   0.8
 
-# --- Time-varying Beta Parameters ---
-beta_1  0.1   1.0
-beta_2  0.1   1.0
-beta_3  0.1   1.0
-beta_4  0.1   1.0
-beta_5  0.1   1.0
-beta_6  0.1   1.0
-beta_7  0.1   1.0
+# --- NPI Scaling (Kappa) ---
+kappa_2 0.2   1.2
+kappa_3 0.2   1.2
+kappa_4 0.2   1.2
+kappa_5 0.2   1.2
+kappa_6 0.2   1.2
+kappa_7 0.2   1.2
 
-# --- Transmission Parameters ---
-# beta    0.20   0.6 # Placeholder
-theta   0.2    1.0  
+# --- Transmission ---
+theta   0.2   0.8
 
-# --- Disease Progression Rates (inverse durations in days) ---
-# 1/sigma = Latent period (e.g., 2-7 days)
-sigma     0.14   0.6
-# 1/gamma_p = Presymptomatic infectious period (e.g., 1-3 days)
-gamma_p   0.33   1.0
-# 1/gamma_A = Asymptomatic infectious period (e.g., 5-14 days)
-gamma_A   0.07   0.4
-# 1/gamma_I = Symptomatic infectious period (at home) (e.g., 5-10 days)
-gamma_I   0.1    0.4
-# 1/gamma_H = Hospital stay duration (non-ICU) (e.g., 7-20 days)
-gamma_H   0.05   0.15
-# 1/gamma_ICU = ICU stay duration (e.g., 10-25 days)
-gamma_ICU 0.04   0.125
+# --- Progression Rates ---
+sigma     0.15  0.30
+gamma_p   0.20  0.50
+gamma_A   0.10  0.25
+gamma_I   0.10  0.25
+gamma_H   0.05  0.20
+gamma_ICU 0.03  0.10
 
-# --- Age-specific Parameters (structured bounds) ---
-# Fraction asymptomatic (p_i) - higher for younger people
-p_0   0.3   0.9
-p_1   0.2   0.8
-p_2   0.1   0.8
-p_3   0.05  0.8
+# --- Age-Specific: Asymptomatic Fraction ---
+p_0   0.60   0.95
+p_1   0.30   0.70
+p_2   0.10   0.40
+p_3   0.01   0.20
 
-# Hospitalization rate/factor (h_i) - increasing with age
-h_0   0.0008 0.05
-h_1   0.001  0.15
-h_2   0.01  0.30
-h_3   0.01   0.50
+# --- Age-Specific: Hospitalization (h) ---
+h_0   0.001 0.015
+h_1   0.02  0.20
+h_2   0.20  0.35
+h_3   0.3  0.60
 
-# ICU admission rate/factor (icu_i) - highest for middle-aged adults
-icu_0   0.001  0.15
-icu_1   0.02  0.30
-icu_2   0.03  0.40
-icu_3   0.015  0.25
+# --- Age-Specific: ICU Admission (icu) ---
+icu_0   0.002  0.10
+icu_1   0.035  0.15
+icu_2   0.06   0.20
+icu_3   0.00   0.05
 
-# Hospital mortality rate/factor (d_H_i) - increasing with age
-d_H_0   0.001 0.05
-d_H_1   0.003 0.15
-d_H_2   0.01  0.30
-d_H_3   0.01   0.40
+# --- Age-Specific: Hospital Mortality (d_H) ---
+d_H_0   0.00  0.02
+d_H_1   0.00  0.05
+d_H_2   0.10  0.25
+d_H_3   0.40  0.70
 
-# ICU mortality rate/factor (d_ICU_i) - increasing with age
-d_ICU_0 0.001  0.20
-d_ICU_1 0.01  0.35
-d_ICU_2 0.02   0.50
-d_ICU_3 0.07   0.60
-
-# --- NPI Scaling Factors (kappa_period_X) ---
-# kappa_1 is fixed at 1.0 (baseline)
-kappa_2 0.5   1.2
-kappa_3 0.25   1.1
-kappa_4 0.25   1.0 
-kappa_5 0.6   1.3
-kappa_6 1.0   1.5
-kappa_7 0.7  1.8
+# --- Age-Specific: ICU Mortality (d_ICU) ---
+d_ICU_0 0.00 0.20
+d_ICU_1 0.05 0.30
+d_ICU_2 0.20 0.60
+d_ICU_3 0.40 0.90
 
 # --- Initial State Multipliers ---
-E0_multiplier   0.1   20.0
-P0_multiplier   0.1   20.0
-A0_multiplier   0.1   20.0
-I0_multiplier   0.1   20.0
-H0_multiplier   0.1   20.0
-ICU0_multiplier 0.1   20.0
-R0_multiplier   0.1   20.0
-D0_multiplier   0.1   20.0
+E0_multiplier   0.5  3.0
+P0_multiplier   0.5  3.0
+A0_multiplier   0.5  3.0
+I0_multiplier   0.5  3.0
+H0_multiplier   0.8  1.5
+ICU0_multiplier 0.8  1.5
+R0_multiplier   0.0  2.0
+D0_multiplier   0.9  1.1
 
-# --- Susceptibility / Infectiousness ---
-a_0      0.1          1.0
-a_1      0.1          1.0
-a_2      0.1          1.0
-a_3      0.1          1.0
-h_infec_0      0.1          1.0
-h_infec_1      0.1          1.0
-h_infec_2      0.1          1.0
-h_infec_3      0.1          1.0
+# --- Run-Up Parameters ---
+seed_exposed   5.0   50.0
+runup_days     15.0  25.0
+
+# --- Other ---
+a_0            0.5    1.0
+a_1            0.8    1.2
+a_2            0.8    1.2
+a_3            0.8    1.5
+
+h_infec_0      0.8    1.2
+h_infec_1      0.8    1.2
+h_infec_2      0.8    1.2
+h_infec_3      0.8    1.2
+
+d_community_0  0.0 0.001
+d_community_1  0.0 0.001
+d_community_2  0.0 0.01
+d_community_3  0.0 0.20

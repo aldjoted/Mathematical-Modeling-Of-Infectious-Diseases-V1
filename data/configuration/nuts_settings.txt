@@ -1,13 +1,16 @@
 # NUTS (No-U-Turn Sampler) Configuration File
-# Settings for the NUTS algorithm
+# Single-phase calibration settings
 
-# Number of warmup iterations for step size adaptation
-nuts_warmup 5
+# Total number of iterations (all samples are stored from iteration 1)
+nuts_iterations 25
 
-# Number of samples to collect after warmup
-nuts_samples 2000
+# Number of iterations for step-size adaptation (typically 10-25% of total)
+nuts_adaptation_window 5
 
-# Higher values (0.8-0.95) are recommended for NUTS
+# Target acceptance probability (0.8-0.95 recommended for NUTS)
 nuts_delta_target 0.8
 
-nuts_max_tree_depth 10
+# Maximum tree depth - REDUCED to limit computation time
+# Each depth level doubles the number of leapfrog steps
+# For expensive gradient evaluations, keep this low (2-4)
+nuts_max_tree_depth 3

@@ -6,3 +6,10 @@ data/output
 data/visualizations/
 data/mcmc_samples/
 scripts/model/data/
+docs/abstracts/
+data/checkpoints/
+docs/*
+scripts/DataVisualization/__pycache__/
+scripts/data-processing/__pycache__/
+scripts/model/__pycache__/
+scripts/utils/__pycache__/

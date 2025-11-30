@@ -9,7 +9,7 @@
 
 #include "sir_age_structured/parameters/SIRParamerterManager.hpp"
 #include "sir_age_structured/objectives/PoissonLikeLihoodObjective.hpp"
-#include "sir_age_structured/solvers/Dropri5SolverStrategy.hpp"
+#include "sir_age_structured/solvers/Dopri5SolverStrategy.hpp"
 #include "sir_age_structured/optimizers/HillClimbingOptimizer.hpp"
 #include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
 #include "sir_age_structured/interfaces/ISimulationCache.hpp"

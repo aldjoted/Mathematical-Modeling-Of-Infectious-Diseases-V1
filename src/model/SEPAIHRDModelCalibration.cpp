@@ -48,6 +48,16 @@ SEPAIHRDModelCalibration::SEPAIHRDModelCalibration(
              THROW_INVALID_PARAM("SEPAIHRDModelCalibration", "Initial state derived from calibration data is empty.");
         }
 
+        // Validate initial state size matches model expectations
+        int num_age_classes = model_->getNumAgeClasses();
+        int expected_size = num_age_classes * constants::NUM_COMPARTMENTS_SEPAIHRD; // 11 compartments
+        
+        if (initial_state_cached_.size() != expected_size) {
+             THROW_INVALID_PARAM("SEPAIHRDModelCalibration", 
+                "Initial state size mismatch. Expected " + std::to_string(expected_size) + 
+                ", got " + std::to_string(initial_state_cached_.size()));
+        }
+
         try {
             parameter_manager_ = std::make_unique<SEPAIHRDParameterManager>(
                 model_, params_to_calibrate_, proposal_sigmas_, param_bounds_);

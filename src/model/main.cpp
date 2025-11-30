@@ -21,12 +21,17 @@
 #include "model/ReproductionNumberCalculator.hpp"
 #include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
 #include "sir_age_structured/ModelCalibrator.hpp"
-#include "sir_age_structured/solvers/Dropri5SolverStrategy.hpp"
+#include "sir_age_structured/solvers/Dopri5SolverStrategy.hpp"
 #include "sir_age_structured/SimulationResultProcessor.hpp"
 #include "sir_age_structured/caching/SimulationCache.hpp"
 #include "model/PostCalibrationAnalyser.hpp"
+#include "model/SimulationRunner.hpp"
+#include "model/MetricsCalculator.hpp"
+#include "model/AnalysisWriter.hpp"
+#include "model/ResultAggregator.hpp"
 #include "model/optimizers/NUTSSampler.hpp"
 #include "model/objectives/SEPAIHRDGradientObjectiveFunction.hpp"
+#include "model/ModelConstants.hpp"
 
 // Utility includes
 #include "utils/FileUtils.hpp"
@@ -231,25 +236,97 @@ int main(int argc, char* argv[]) {
         std::vector<std::string> params_to_calibrate = readParamsToCalibrate(params_to_calibrate_file);
 
         // === SIMULATION SETUP ===
+        // Implementation of "Run-Up Strategy": Simulation starts at t=-runup_days
+        // to allow virus to traverse compartments before observed data at t=0
+        double runup_days = params.runup_days;
+        double seed_exposed = params.seed_exposed;
+        
         vector<double> time_points;
         int num_days = data.getNumDataPoints();
-        time_points.reserve(num_days);
-        for (int t = 0; t < num_days; ++t) {
+        // Calculate total time points: runup period + observation period
+        int total_time_points = static_cast<int>(runup_days) + num_days;
+        time_points.reserve(total_time_points);
+        
+        // Time points from -runup_days to num_days-1
+        for (int t = -static_cast<int>(runup_days); t < num_days; ++t) {
             time_points.push_back(static_cast<double>(t));
         }
-        Logger::getInstance().info("main", "Simulation time points created (0 to " + std::to_string(num_days - 1) + ")");
+        Logger::getInstance().info("main", "Simulation time points created with run-up: t=" + 
+            std::to_string(-runup_days) + " to t=" + std::to_string(num_days - 1) + 
+            " (" + std::to_string(total_time_points) + " total points)");
 
         auto solver_strategy = std::make_shared<Dopri5SolverStrategy>();
         double dt_hint = 1.0;
         double abs_err = 1.0e-6;
         double rel_err = 1.0e-6;
 
-        auto initial_state = data.getInitialSEPAIHRDState(
+        auto initial_state_original = data.getInitialSEPAIHRDState(
             params.sigma, params.gamma_p, params.gamma_A, 
             params.gamma_I, params.p, params.h
         );
 
-        // Display initial state
+        // getInitialSEPAIHRDState now returns 11 compartments including CumH and CumICU
+        // initialized from calibration data
+        Eigen::VectorXd initial_state = initial_state_original;
+        int n_ages = num_age_classes;
+
+        // === RUN-UP STRATEGY: Seed Exposed Compartment ===
+        // When using run-up (starting at t=-runup_days), we seed the E compartment
+        // with seed_exposed individuals distributed proportionally by population.
+        // Other compartments start near zero since we're before the epidemic start.
+        if (runup_days > 0 && seed_exposed > 0) {
+            Logger::getInstance().info("main", "Applying run-up seeding strategy: " + 
+                std::to_string(seed_exposed) + " exposed individuals at t=-" + std::to_string(runup_days));
+            
+            // Reset all infectious compartments to near-zero for run-up start
+            // Keep population in S, seed E proportionally by population
+            double total_pop = N.sum();
+            for (int i = 0; i < n_ages; ++i) {
+                // Proportional seeding by population size
+                double age_fraction = N(i) / total_pop;
+                initial_state(i + n_ages) = seed_exposed * age_fraction;  // E compartment
+                initial_state(i + 2*n_ages) = 0.0;  // P compartment
+                initial_state(i + 3*n_ages) = 0.0;  // A compartment  
+                initial_state(i + 4*n_ages) = 0.0;  // I compartment
+                initial_state(i + 5*n_ages) = 0.0;  // H compartment
+                initial_state(i + 6*n_ages) = 0.0;  // ICU compartment
+                initial_state(i + 7*n_ages) = 0.0;  // R compartment
+                initial_state(i + 8*n_ages) = 0.0;  // D compartment
+                initial_state(i + 9*n_ages) = 0.0;  // CumH compartment
+                initial_state(i + 10*n_ages) = 0.0; // CumICU compartment
+            }
+        } else {
+            // Original behavior without run-up: Apply initial state multipliers from configuration
+            initial_state.segment(1*n_ages, n_ages) *= params.E0_multiplier;
+            initial_state.segment(2*n_ages, n_ages) *= params.P0_multiplier;
+            initial_state.segment(3*n_ages, n_ages) *= params.A0_multiplier;
+            initial_state.segment(4*n_ages, n_ages) *= params.I0_multiplier;
+            initial_state.segment(5*n_ages, n_ages) *= params.H0_multiplier;
+            initial_state.segment(6*n_ages, n_ages) *= params.ICU0_multiplier;
+            initial_state.segment(7*n_ages, n_ages) *= params.R0_multiplier;
+            initial_state.segment(8*n_ages, n_ages) *= params.D0_multiplier;
+        }
+
+        for (int i = 0; i < n_ages; ++i) {
+            double sum_non_S = 0.0;
+            for (int j = 1; j < constants::NUM_COMPARTMENTS_SEPAIHRD; ++j) {
+                sum_non_S += initial_state(j * n_ages + i);
+            }
+            if (sum_non_S > N(i)) {
+                Logger::getInstance().warning("main", "Initial state sum exceeds population for age class " + std::to_string(i) + ", clamping S to 0");
+                initial_state(i) = 0.0;
+            } else {
+                initial_state(i) = N(i) - sum_non_S;
+            }
+        }
+
+        // Display initial state (now with multipliers applied)
+        Logger::getInstance().info("main", "Run-up config: runup_days=" + std::to_string(runup_days) +
+            ", seed_exposed=" + std::to_string(seed_exposed));
+        Logger::getInstance().info("main", "Multipliers applied: E0=" + std::to_string(params.E0_multiplier) +
+            ", P0=" + std::to_string(params.P0_multiplier) +
+            ", A0=" + std::to_string(params.A0_multiplier) +
+            ", I0=" + std::to_string(params.I0_multiplier));
         for (int i = 0; i < num_age_classes; ++i) {
             cout << "Initial state for age class " << i << ": "
                  << "S: " << initial_state[i] << ", "
@@ -260,7 +337,9 @@ int main(int argc, char* argv[]) {
                  << "H: " << initial_state[i + 5 * num_age_classes] << ", "
                  << "ICU: " << initial_state[i + 6 * num_age_classes] << ", "
                  << "R: " << initial_state[i + 7 * num_age_classes] << ", "
-                 << "D: " << initial_state[i + 8 * num_age_classes]
+                 << "D: " << initial_state[i + 8 * num_age_classes] << ", "
+                 << "CumH: " << initial_state[i + 9 * num_age_classes] << ", "
+                 << "CumICU: " << initial_state[i + 10 * num_age_classes]
                  << endl;
         }
 
@@ -427,13 +506,24 @@ int main(int argc, char* argv[]) {
                 auto post_analysis_npi_strategy = createNpiStrategy(final_calibrated_params, all_kappa_parameter_names, overall_param_bounds, fixed_kappa_model_index);
                 auto final_model_template = std::make_shared<AgeSEPAIHRDModel>(final_calibrated_params, post_analysis_npi_strategy);
 
+                // Create the 4 required components for dependency injection
+                auto simulation_runner = std::make_unique<SimulationRunner>(final_model_template, solver_strategy);
+                auto metrics_calculator = std::make_unique<MetricsCalculator>();
+                auto analysis_writer = std::make_unique<AnalysisWriter>();
+                auto result_aggregator = std::make_unique<ResultAggregator>();
+
+                // Construct the orchestrator with dependency injection
                 auto post_calibration_analyser = std::make_shared<PostCalibrationAnalyser>(
                     final_model_template,
                     solver_strategy,
                     time_points,
                     initial_state,
                     output_dir,
-                    data
+                    data,
+                    std::move(simulation_runner),
+                    std::move(metrics_calculator),
+                    std::move(analysis_writer),
+                    std::move(result_aggregator)
                 );
 
                 int total_sample_size = mcmc_samples.size();
@@ -445,9 +535,17 @@ int main(int argc, char* argv[]) {
                     return (it != analysis_mcmc_settings.end()) ? static_cast<int>(it->second) : default_val;
                 };
 
-                int num_samples_for_ppc = get_setting("ppc_samples", total_sample_size > 500 ? 500 : total_sample_size);
-                if (mcmc_samples.size() < static_cast<size_t>(num_samples_for_ppc)) {
-                    num_samples_for_ppc = mcmc_samples.size();
+                // ppc_samples: -1 means use ALL samples, otherwise use the specified number
+                int ppc_samples_setting = get_setting("ppc_samples", -1);
+                int num_samples_for_ppc;
+                if (ppc_samples_setting < 0) {
+                    // Use all available samples
+                    num_samples_for_ppc = total_sample_size;
+                    Logger::getInstance().info("main", "PPC will use ALL " + std::to_string(num_samples_for_ppc) + " samples");
+                } else {
+                    // Use the configured number, but cap at available samples
+                    num_samples_for_ppc = std::min(ppc_samples_setting, total_sample_size);
+                    Logger::getInstance().info("main", "PPC will use " + std::to_string(num_samples_for_ppc) + " of " + std::to_string(total_sample_size) + " samples");
                 }
                 int batch_size = get_setting("analysis_batch_size", 100);
 

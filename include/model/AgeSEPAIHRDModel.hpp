@@ -83,6 +83,9 @@ namespace epidemic {
         /** @brief Age-specific mortality rate in ICU */
         Eigen::VectorXd d_ICU;
         
+        /** @brief Age-specific community/nursing home mortality rate (direct I->D) */
+        Eigen::VectorXd d_community;
+        
         /** @brief Strategy defining NPI effects on contact rates */
         std::shared_ptr<INpiStrategy> npi_strategy;
 
@@ -95,8 +98,26 @@ namespace epidemic {
         /** @brief Original reduced transmissibility before interventions */
         double baseline_theta;
     
-        /** @brief Mutex for thread safety on getters/setters and internal state modification. */
-        mutable std::mutex mutex_; 
+        // REMOVED: mutable std::mutex mutex_; 
+
+        // Keep cached working vectors (They are now safe because they are thread-local per clone)
+        mutable Eigen::VectorXd cached_infectious_pressure;
+        mutable Eigen::VectorXd cached_infectious_total;
+        mutable Eigen::VectorXd cached_lambda;
+        mutable Eigen::VectorXd cached_dS;
+        mutable Eigen::VectorXd cached_dE;
+        mutable Eigen::VectorXd cached_dP;
+        mutable Eigen::VectorXd cached_dA;
+        mutable Eigen::VectorXd cached_dI;
+        mutable Eigen::VectorXd cached_dH;
+        mutable Eigen::VectorXd cached_dICU;
+        mutable Eigen::VectorXd cached_dR;
+        mutable Eigen::VectorXd cached_dD;
+
+        /**
+         * @brief Resizes the working vectors to match the number of age classes.
+         */
+        void resizeWorkingVectors();
 
         // Add these private member variables:
         double E0_multiplier = 1.0;
@@ -107,6 +128,12 @@ namespace epidemic {
         double ICU0_multiplier = 1.0;
         double R0_multiplier = 1.0;
         double D0_multiplier = 1.0;
+        
+        /** @brief Number of days before t=0 to start the simulation (run-up period) */
+        double runup_days = 30.0;
+        
+        /** @brief Total number of exposed individuals to seed at t=-runup_days */
+        double seed_exposed = 10.0;
 
         // --- Private helper methods ---
         /**
@@ -140,6 +167,16 @@ namespace epidemic {
         */
         AgeSEPAIHRDModel(const SEPAIHRDParameters& params, std::shared_ptr<INpiStrategy> npi_strategy_ptr);
         
+        /**
+         * @brief Copy Constructor (Deep copy required for strategies)
+         */
+        AgeSEPAIHRDModel(const AgeSEPAIHRDModel& other);
+
+        /**
+         * @brief Clone method for Prototype Pattern
+         */
+        virtual std::shared_ptr<AgeSEPAIHRDModel> clone() const;
+
         /**
          * @brief Computes the derivatives of the state variables using the appropriate kappa.
          * @param state Current state variables
@@ -240,6 +277,8 @@ namespace epidemic {
         const Eigen::VectorXd& getMortalityRateH() const;   
         /** @brief Returns the age-specific mortality rate in ICU (d_ICU) */
         const Eigen::VectorXd& getMortalityRateICU() const; 
+        /** @brief Returns the age-specific community mortality rate (d_community) */
+        const Eigen::VectorXd& getCommunityMortalityRate() const; 
     
         /**
          * @brief Sets a new transmission rate (beta). Thread-safe.

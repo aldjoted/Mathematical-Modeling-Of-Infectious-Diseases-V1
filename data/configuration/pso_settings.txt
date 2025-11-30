@@ -5,11 +5,11 @@
 
 # iterations: Total number of optimization iterations
 # Range: > 0
-iterations 100
+iterations 1
 
 # swarm_size: Number of particles in the swarm
 # Range: > 0
-swarm_size 150
+swarm_size 1
 
 # omega_start: Initial inertia weight for velocity update
 # Range: >= 0
@@ -37,7 +37,7 @@ c2_final 2.0
 
 # report_interval: Number of iterations between progress reports
 # Range: > 0
-report_interval 5
+report_interval 1
 
 # === Advanced Algorithm Parameters ===
 

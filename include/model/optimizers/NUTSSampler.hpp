@@ -15,15 +15,15 @@ namespace epidemic {
  * @class NUTSSampler
  * @brief Implements the No-U-Turn Sampler (NUTS), a highly efficient MCMC algorithm.
  *
- * This class provides a 5/5, production-quality implementation of the NUTS algorithm
+ * This class provides a single-phase implementation of the NUTS algorithm
  * as described in "The No-U-Turn Sampler: Adaptively Setting Path Lengths in
  * Hamiltonian Monte Carlo" by Hoffman & Gelman (2014).
  *
  * It features:
  * - Automatic tuning of the number of leapfrog steps per iteration.
- * - Dual-averaging for adaptive step-size (epsilon) tuning during warmup.
+ * - Continuous dual-averaging for adaptive step-size (epsilon) tuning.
  * - Robust error handling for divergent trajectories.
- * - High performance through careful C++ practices (e.g., avoiding copies).
+ * - Single-phase calibration: all samples are stored from iteration 1.
  *
  * This sampler requires the objective function to provide gradients by implementing
  * the IGradientObjectiveFunction interface.
@@ -35,10 +35,10 @@ public:
     /**
      * @brief Configure the NUTS sampler with specific settings.
      * @param settings Map of setting names to values. Supported keys:
-     *                 "nuts_warmup": Number of warmup iterations. Default: 1000.
-     *                 "nuts_samples": Number of sampling iterations. Default: 1000.
+     *                 "nuts_iterations": Total number of iterations. Default: 2000.
      *                 "nuts_delta_target": Target acceptance probability for dual averaging. Default: 0.8.
      *                 "nuts_max_tree_depth": Maximum depth of the binary tree to prevent infinite loops. Default: 10.
+     *                 "nuts_adaptation_window": Number of iterations for step-size adaptation. Default: 500.
      */
     void configure(const std::map<std::string, double>& settings) override;
 
@@ -115,8 +115,8 @@ private:
     ) const;
 
     // Configuration parameters
-    int num_warmup_;
-    int num_samples_;
+    int num_iterations_;      // Total number of iterations (all samples stored)
+    int adaptation_window_;   // Number of iterations for step-size adaptation
     double delta_target_;
     int max_tree_depth_;
 

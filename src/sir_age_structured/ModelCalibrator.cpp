@@ -1,4 +1,5 @@
 #include "sir_age_structured/ModelCalibrator.hpp"
+#include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -75,6 +76,18 @@ namespace epidemic {
             std::cout << "\n--- Running Phase 2: " << PHASE2_NAME << " ---" << std::endl;
             IOptimizationAlgorithm* phase2_algo = it_phase2->second.get();
             phase2_algo->configure(phase2_settings);
+            
+            // Transfer learned covariance from Phase 1 to Phase 2 (if available)
+            // This allows MCMC to immediately use the correlation structure learned during optimization
+            if (phase1_result_.finalCovariance.size() > 0) {
+                // Try to cast to MetropolisHastingsSampler to set initial covariance
+                auto* mcmc_sampler = dynamic_cast<MetropolisHastingsSampler*>(phase2_algo);
+                if (mcmc_sampler) {
+                    std::cout << "Transferring learned covariance from Phase 1 to Phase 2 for warm start." << std::endl;
+                    mcmc_sampler->setInitialCovariance(phase1_result_.finalCovariance);
+                }
+            }
+            
             phase2_result_ = phase2_algo->optimize(current_best_params, *objectiveFunction_, *parameterManager_);
     
             if (phase2_result_.bestObjectiveValue > best_objective_value_) {

@@ -20,6 +20,10 @@ struct OptimizationResult {
     double bestObjectiveValue = -std::numeric_limits<double>::infinity();
     std::vector<Eigen::VectorXd> samples; // For MCMC-like algorithms
     std::vector<double> sampleObjectiveValues; // For MCMC-like algorithms
+    std::map<std::string, double> additionalStats;
+    
+    /** @brief Final learned covariance matrix from optimization (for Phase 1 -> Phase 2 transfer) */
+    Eigen::MatrixXd finalCovariance;
 };
 
 /**

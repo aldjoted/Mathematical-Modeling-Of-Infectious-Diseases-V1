@@ -4,6 +4,7 @@
 #include "sir_age_structured/interfaces/IOdeSolverStrategy.hpp"
 #include "sir_age_structured/Simulator.hpp"
 #include "model/AgeSEPAIHRDModel.hpp"
+#include "model/ModelConstants.hpp"
 #include <memory>
 #include <Eigen/Dense>
 #include <string>
@@ -52,12 +53,12 @@ namespace epidemic {
         /**
          * @brief Convenience constant for the number of compartments in this specific model.
          */
-        static constexpr int NUM_COMPARTMENTS = 9; // S, E, P, A, I, H, ICU, R, D
+        static constexpr int NUM_COMPARTMENTS = constants::NUM_COMPARTMENTS_SEPAIHRD; // S, E, P, A, I, H, ICU, R, D
         /**
          * @brief Convenience constant for the offset of the D (Deaths) compartment in the state vector.
          * (0=S, 1=E, 2=P, 3=A, 4=I, 5=H, 6=ICU, 7=R, 8=D)
          */
-        static constexpr int D_COMPARTMENT_OFFSET = 8; 
+        static constexpr int D_COMPARTMENT_OFFSET = constants::NUM_COMPARTMENTS_SEPAIHRD - 1; 
     };
     
 } // namespace epidemic

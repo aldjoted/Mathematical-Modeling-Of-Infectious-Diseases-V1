@@ -13,7 +13,7 @@ namespace constants {
     constexpr double DEFAULT_BASELINE_PERIOD_END_TIME = 13.0;
     constexpr double DEFAULT_BASELINE_KAPPA = 1.0;
 
-    constexpr int NUM_COMPARTMENTS_SEPAIHRD = 9; 
+    constexpr int NUM_COMPARTMENTS_SEPAIHRD = 11; 
 
 } // namespace constants
 } // namespace epidemic

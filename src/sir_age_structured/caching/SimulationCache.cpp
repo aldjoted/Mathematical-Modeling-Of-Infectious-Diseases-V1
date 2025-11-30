@@ -1,150 +1,209 @@
 #include "sir_age_structured/caching/SimulationCache.hpp"
-#include <sstream>
-#include <iomanip>
+#include <functional>
+#include <cmath>
 #include <stdexcept>
+#include <limits>
+#include <algorithm>
+#include <mutex>
 
 namespace epidemic {
 
-SimulationCache::SimulationCache(size_t max_size, int hash_precision)
-    : max_size_(max_size), hash_precision_(hash_precision), min_frequency_(0)
-{
-    if (max_size_ == 0) {
-        throw std::invalid_argument("SimulationCache (LFU): max_size must be greater than 0.");
-    }
+// Optimized MurmurHash3-like mixer
+inline size_t mix_hash(size_t k) {
+    k ^= k >> 33;
+    k *= 0xff51afd7ed558ccd;
+    k ^= k >> 33;
+    k *= 0xc4ceb9fe1a85ec53;
+    k ^= k >> 33;
+    return k;
 }
 
-// Private helper to generate a unique string key from parameter values,
-// considering the specified precision.
-std::string SimulationCache::createStringKey(const Eigen::VectorXd& params) const {
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(hash_precision_);
-    for (int i = 0; i < params.size(); ++i) {
-        oss << params[i];
-        if (i < params.size() - 1) {
-            oss << "_";
-        }
+SimulationCache::SimulationCache(size_t max_size)
+    : capacity_(max_size), count_(0), current_tick_(0)
+{
+    if (max_size == 0) {
+        throw std::invalid_argument("SimulationCache: max_size must be > 0.");
     }
-    return oss.str();
+    // Pre-allocate SoA vectors to ensure contiguous memory
+    keys_.resize(capacity_, EMPTY_KEY);
+    values_.resize(capacity_, 0.0);
+    frequencies_.resize(capacity_, 0);
+    timestamps_.resize(capacity_, 0);
+    occupied_.resize(capacity_, 0);
+}
+
+size_t SimulationCache::computeHash(const Eigen::VectorXd& params) const {
+    size_t seed = 0;
+    const double* ptr = params.data();
+    const int size = params.size();
+    
+    constexpr double precision_scale = 1e8;
+
+    // Unrolled loop for hashing
+    for (int i = 0; i < size; ++i) {
+        // Fast quantization
+        long long quantized = static_cast<long long>(ptr[i] * precision_scale + 0.5);
+        
+        // Combine hash (SplitMix64-like variant)
+        size_t k = static_cast<size_t>(quantized);
+        seed ^= mix_hash(k) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+    return seed;
 }
 
 std::string SimulationCache::createCacheKey(const Eigen::VectorXd& parameters) const {
-    return createStringKey(parameters);
+    return std::to_string(computeHash(parameters));
 }
 
-// Helper to update frequency and recency for a key access.
-void SimulationCache::updateFrequency(const std::string& key) {
-    auto& node = cache_.at(key);
-    int old_freq = node.frequency;
-
-    freq_map_[old_freq].erase(node.freq_list_iter);
+// Open Addressing with Linear Probing
+size_t SimulationCache::findIndex(size_t key) const {
+    size_t idx = key % capacity_;
+    size_t start_idx = idx;
     
-    // If that frequency list is empty and was the minimum, update min_frequency_.
-    if (freq_map_[old_freq].empty()) {
-        freq_map_.erase(old_freq);
-        if (old_freq == min_frequency_) {
-            // Next available frequency becomes the new minimum.
-            min_frequency_ = freq_map_.empty() ? 0 : freq_map_.begin()->first;
+    while (occupied_[idx]) {
+        if (keys_[idx] == key) {
+            return idx; // Found
         }
+        idx++;
+        if (idx == capacity_) idx = 0;
+        if (idx == start_idx) break; // Should not happen if managed correctly
     }
-
-    node.frequency++;
-    int new_freq = node.frequency;
-
-    // Add key to the most recent position in the new frequency list.
-    freq_map_[new_freq].push_back(key);
-    node.freq_list_iter = std::prev(freq_map_[new_freq].end());
+    return -1; // Not found
 }
 
-std::optional<double> SimulationCache::get(const Eigen::VectorXd& parameters) {
-    std::string key = createStringKey(parameters);
-    auto it = cache_.find(key);
-    if (it == cache_.end()) {
-        return std::nullopt; // Cache miss
-    }
+size_t SimulationCache::evict() {
+    // O(N) scan for eviction candidate (LFU with LRU tie-breaker)
+    // Since cache size is small (~1000), this linear scan is faster than maintaining heap/list structures
+    // due to vectorization and prefetching.
+    
+    size_t victim_idx = 0;
+    uint32_t min_freq = std::numeric_limits<uint32_t>::max();
+    uint32_t min_time = std::numeric_limits<uint32_t>::max();
 
-    // Cache hit: Update frequency and return value
-    updateFrequency(key);
-    return it->second.value;
-}
-
-void SimulationCache::set(const Eigen::VectorXd& parameters, double result) {
-    std::string key = createStringKey(parameters);
-    // If key exists, update value and frequency.
-    if (cache_.find(key) != cache_.end()) {
-        cache_[key].value = result;
-        updateFrequency(key);
-    } else {
-        // Evict an element if the cache is full.
-        if (cache_.size() >= max_size_) {
-            // Evict the LRU item among those with the minimum frequency.
-            auto it = freq_map_.find(min_frequency_);
-            if (it != freq_map_.end() && !it->second.empty()) {
-                std::string key_to_evict = it->second.front();   // Get least recently used key at min frequency
-                it->second.pop_front();
-                cache_.erase(key_to_evict);
-                if (it->second.empty()) {
-                    freq_map_.erase(min_frequency_);
+    const uint32_t* __restrict__ freqs = frequencies_.data();
+    const uint32_t* __restrict__ times = timestamps_.data();
+    const uint8_t* __restrict__ occ = occupied_.data();
+    
+    for (size_t i = 0; i < capacity_; ++i) {
+        if (occ[i]) {
+            if (freqs[i] < min_freq) {
+                min_freq = freqs[i];
+                min_time = times[i];
+                victim_idx = i;
+            } else if (freqs[i] == min_freq) {
+                if (times[i] < min_time) {
+                    min_time = times[i];
+                    victim_idx = i;
                 }
             }
         }
-        // Insert new element with frequency 1.
-        int initial_frequency = 1;
-        freq_map_[initial_frequency].push_back(key);
-        auto list_it = std::prev(freq_map_[initial_frequency].end());
-        cache_[key] = {result, initial_frequency, list_it};
-        min_frequency_ = 1; // New entries always have frequency 1.
+    }
+    
+    occupied_[victim_idx] = 0;
+    count_--;
+    return victim_idx;
+}
+
+std::optional<double> SimulationCache::get(const Eigen::VectorXd& parameters) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t key = computeHash(parameters);
+    size_t idx = findIndex(key);
+
+    if (idx != static_cast<size_t>(-1)) {
+        frequencies_[idx]++;
+        timestamps_[idx] = ++current_tick_;
+        return values_[idx];
+    }
+    return std::nullopt;
+}
+
+void SimulationCache::set(const Eigen::VectorXd& parameters, double result) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t key = computeHash(parameters);
+    size_t idx = findIndex(key);
+
+    if (idx != static_cast<size_t>(-1)) {
+        // Update existing
+        values_[idx] = result;
+        frequencies_[idx]++;
+        timestamps_[idx] = ++current_tick_;
+    } else {
+        // Insert new
+        if (count_ >= capacity_) {
+            evict(); // Make space
+        }
+        
+        // Find empty slot (Linear Probing)
+        size_t insert_idx = key % capacity_;
+        while (occupied_[insert_idx]) {
+            insert_idx++;
+            if (insert_idx == capacity_) insert_idx = 0;
+        }
+
+        keys_[insert_idx] = key;
+        values_[insert_idx] = result;
+        frequencies_[insert_idx] = 1;
+        timestamps_[insert_idx] = ++current_tick_;
+        occupied_[insert_idx] = true;
+        count_++;
     }
 }
 
 void SimulationCache::clear() {
-    cache_.clear();
-    freq_map_.clear();
-    min_frequency_ = 0;
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::fill(occupied_.begin(), occupied_.end(), 0);
+    std::fill(frequencies_.begin(), frequencies_.end(), 0);
+    count_ = 0;
+    current_tick_ = 0;
 }
 
-// Returns the current cache size.
 size_t SimulationCache::size() const {
-    return cache_.size();
+    std::lock_guard<std::mutex> lock(mutex_);
+    return count_;
 }
 
-// Attempts to retrieve a cached likelihood value using a key.
-bool SimulationCache::getLikelihood(const std::string& key, double& value) {
-    auto it = cache_.find(key);
-    if (it != cache_.end()) {
-        updateFrequency(key);
-        value = it->second.value;
-        return true;
-    }
+bool SimulationCache::getLikelihood(const std::string& keyStr, double& value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        size_t key = std::stoull(keyStr);
+        size_t idx = findIndex(key);
+        if (idx != static_cast<size_t>(-1)) {
+            frequencies_[idx]++;
+            timestamps_[idx] = ++current_tick_;
+            value = values_[idx];
+            return true;
+        }
+    } catch (...) {}
     return false;
 }
 
-// Store a likelihood result in the cache using a key.
-void SimulationCache::storeLikelihood(const std::string& key, double value) {
-    // If key exists, update value and frequency.
-    auto it = cache_.find(key);
-    if (it != cache_.end()) {
-        it->second.value = value;
-        updateFrequency(key);
-    } else {
-        // Evict if cache is full.
-        if (cache_.size() >= max_size_) {
-            auto freq_it = freq_map_.find(min_frequency_);
-            if (freq_it != freq_map_.end() && !freq_it->second.empty()) {
-                std::string key_to_evict = freq_it->second.front();
-                freq_it->second.pop_front();
-                cache_.erase(key_to_evict);
-                if (freq_it->second.empty()) {
-                    freq_map_.erase(min_frequency_);
-                }
+void SimulationCache::storeLikelihood(const std::string& keyStr, double value) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        size_t key = std::stoull(keyStr);
+        size_t idx = findIndex(key);
+        
+        if (idx != static_cast<size_t>(-1)) {
+            values_[idx] = value;
+            frequencies_[idx]++;
+            timestamps_[idx] = ++current_tick_;
+        } else {
+            if (count_ >= capacity_) evict();
+            
+            size_t insert_idx = key % capacity_;
+            while (occupied_[insert_idx]) {
+                insert_idx++;
+                if (insert_idx == capacity_) insert_idx = 0;
             }
+
+            keys_[insert_idx] = key;
+            values_[insert_idx] = value;
+            frequencies_[insert_idx] = 1;
+            timestamps_[insert_idx] = ++current_tick_;
+            occupied_[insert_idx] = true;
+            count_++;
         }
-        // Insert the new key with initial frequency.
-        int initial_frequency = 1;
-        freq_map_[initial_frequency].push_back(key);
-        auto list_it = std::prev(freq_map_[initial_frequency].end());
-        cache_[key] = {value, initial_frequency, list_it};
-        min_frequency_ = 1;
-    }
+    } catch (...) {}
 }
 
 } // namespace epidemic

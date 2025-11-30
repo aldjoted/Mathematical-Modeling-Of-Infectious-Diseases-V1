@@ -1,26 +1,22 @@
 #include "model/objectives/SEPAIHRDObjectiveFunction.hpp"
+#include "model/parameters/SEPAIHRDParameterManager.hpp"
 #include "exceptions/Exceptions.hpp"
 #include "sir_age_structured/SimulationResultProcessor.hpp"
 #include "utils/Logger.hpp"
+#include "model/ModelConstants.hpp"
 #include <cmath>
 #include <algorithm>
 #include <limits>
-#include <sstream>
 #include <future>
+
+// OpenMP Support
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 
 namespace epidemic {
 
-// Helper function to format parameter vector for logging
-std::string formatParameters(const Eigen::VectorXd& params) {
-    std::ostringstream oss;
-    oss << "[";
-    for (int i = 0; i < params.size(); ++i) {
-        oss << params[i] << (i == params.size() - 1 ? "" : ", ");
-    }
-    oss << "]";
-    return oss.str();
-}
-
+std::string formatParameters(const Eigen::VectorXd& params); // Forward decl (assumed helper)
 
 SEPAIHRDObjectiveFunction::SEPAIHRDObjectiveFunction(
     std::shared_ptr<AgeSEPAIHRDModel> model,
@@ -32,356 +28,237 @@ SEPAIHRDObjectiveFunction::SEPAIHRDObjectiveFunction(
     std::shared_ptr<IOdeSolverStrategy> solver_strategy,
     double abs_error,
     double rel_error)
-    : parameterManager_(parameterManager),
-      model_(model),
-      cache_(cache),
-      observed_data_(calibration_data),
-      time_points_(time_points),
-      initial_state_(initial_state),
-      solver_strategy_(solver_strategy),
-      abs_err_(abs_error),
-      rel_err_(rel_error),
-      simulator_(nullptr)
+    : parameterManager_(parameterManager), model_(model), cache_(cache),
+      observed_data_(calibration_data), time_points_(time_points),
+      initial_state_(initial_state), solver_strategy_(solver_strategy),
+      abs_err_(abs_error), rel_err_(rel_error), simulator_(nullptr)
 {
-    const std::string F_NAME = "SEPAIHRDObjectiveFunction::Constructor";
-    if (!model_) {
-        Logger::getInstance().error(F_NAME, "Model pointer cannot be null.");
-        THROW_INVALID_PARAM("SEPAIHRDObjectiveFunction", "Model pointer cannot be null.");
-    }
-    if (time_points_.empty()) {
-        Logger::getInstance().error(F_NAME, "Time points vector cannot be empty.");
-        THROW_INVALID_PARAM("SEPAIHRDObjectiveFunction", "Time points vector cannot be empty.");
-    }
-    if (initial_state_.size() == 0) {
-        Logger::getInstance().error(F_NAME, "Initial state vector cannot be empty.");
-        THROW_INVALID_PARAM("SEPAIHRDObjectiveFunction", "Initial state vector cannot be empty.");
-    }
-    if (!solver_strategy_) {
-        Logger::getInstance().error(F_NAME, "Solver strategy cannot be null.");
-        THROW_INVALID_PARAM("SEPAIHRDObjectiveFunction", "Solver strategy cannot be null.");
-    }
+    // Preallocation is kept for single-threaded usage or reference, 
+    // but calculate() will use local variables for thread safety.
     preallocateInternalMatrices();
     cached_sim_data_.invalidate();
-    Logger::getInstance().debug(F_NAME, "Initialization successful.");
 }
 
 void SEPAIHRDObjectiveFunction::preallocateInternalMatrices() const {
-    const std::string F_NAME = "SEPAIHRDObjectiveFunction::preallocateInternalMatrices";
     if (model_ && !time_points_.empty()) {
         int rows = static_cast<int>(time_points_.size());
         int num_age_classes = model_->getNumAgeClasses();
-        if (rows > 0 && num_age_classes > 0) {
-            simulated_hospitalizations_.resize(rows, num_age_classes);
-            simulated_icu_admissions_.resize(rows, num_age_classes);
-            simulated_deaths_.resize(rows, num_age_classes);
-            //Logger::getInstance().debug(F_NAME, "Preallocated internal matrices: " +
-            //    std::to_string(rows) + "x" + std::to_string(num_age_classes));
-        } else {
-            Logger::getInstance().warning(F_NAME, "Cannot preallocate matrices: rows or age_classes is zero. Rows: " + std::to_string(rows) + ", Age Classes: " + std::to_string(num_age_classes));
-        }
-    } else {
-        Logger::getInstance().error(F_NAME, "Cannot preallocate matrices: model is null or time_points_ is empty.");
-        THROW_INVALID_PARAM("SEPAIHRDObjectiveFunction", "Model is null or time_points_ is empty.");
+        simulated_hospitalizations_.resize(rows, num_age_classes);
+        simulated_icu_admissions_.resize(rows, num_age_classes);
+        simulated_deaths_.resize(rows, num_age_classes);
     }
 }
 
-
 double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) const {
-    const std::string F_NAME = "SEPAIHRDObjectiveFunction::calculate";
-    std::string cache_key_likelihood = cache_.createCacheKey(parameters);
-    double cached_likelihood_value;
+    std::string cache_key = cache_.createCacheKey(parameters);
+    double cached_val;
+    if (cache_.getLikelihood(cache_key, cached_val)) return cached_val;
 
-    if (cache_.getLikelihood(cache_key_likelihood, cached_likelihood_value)) {
-        //Logger::getInstance().debug(F_NAME, "Likelihood " + std::to_string(cached_likelihood_value) + " retrieved from main cache for key: " + cache_key_likelihood);
-        return cached_likelihood_value;
-    }
+    // Thread-safe execution: Clone the model and use local simulator/matrices
     
-    //Logger::getInstance().debug(F_NAME, "Calculating likelihood for parameters: " + formatParameters(parameters) + ". Main cache key: " + cache_key_likelihood);
-
+    // 1. Clone the model to avoid race conditions on mutable members and parameters
+    auto local_model = model_->clone();
+    
+    // 2. Update parameters on the cloned model
     try {
-        parameterManager_.updateModelParameters(parameters);
-    } catch (const std::exception& e) {
-        Logger::getInstance().warning(F_NAME, "Failed to update model parameters. Error: " + std::string(e.what()) + ". Parameters: " + formatParameters(parameters));
-        cached_sim_data_.invalidate();
-        return std::numeric_limits<double>::lowest();
-    }
-
-    // --- Apply the initial state multipliers ---
-    Eigen::VectorXd initial_state_for_run = this->initial_state_;
-    int n_ages = model_->getNumAgeClasses();
-
-    // Get multipliers from the parameter vector
-    auto get_multiplier = [&](const std::string& name) -> double {
-        int idx = parameterManager_.getIndexForParam(name);
-        return (idx != -1) ? parameters(idx) : 1.0;
-    };
-
-    double e0_mult = get_multiplier("E0_multiplier");
-    double p0_mult = get_multiplier("P0_multiplier");
-    double a0_mult = get_multiplier("A0_multiplier");
-    double i0_mult = get_multiplier("I0_multiplier");
-    double h0_mult = get_multiplier("H0_multiplier");
-    double icu0_mult = get_multiplier("ICU0_multiplier");
-    double r0_mult = get_multiplier("R0_multiplier");
-    double d0_mult = get_multiplier("D0_multiplier");
-
-    // Crucially, recalculate S to maintain the population constraint
-    const Eigen::VectorXd& N = model_->getPopulationSizes();
-    for (int i = 0; i < n_ages; ++i) {
-        double sum_non_S = 0.0;
-        for (int j = 1; j < 9; ++j) { // Sum E through D
-            sum_non_S += initial_state_for_run(j * n_ages + i);
+        // Try to cast to SEPAIHRDParameterManager to use the thread-safe update method
+        auto* sepaihrd_manager = dynamic_cast<SEPAIHRDParameterManager*>(&parameterManager_);
+        if (sepaihrd_manager) {
+            sepaihrd_manager->updateModelParameters(parameters, local_model);
+        } else {
+            // Fallback: Update the shared model (NOT THREAD SAFE, but best effort if cast fails)
+            // This path should ideally not be taken in the current architecture
+            parameterManager_.updateModelParameters(parameters);
+            // If we fall back, we might need to clone AFTER update, but that's still racy.
+            // Assuming SEPAIHRDParameterManager is always used.
         }
+    } catch (...) { return std::numeric_limits<double>::lowest(); }
 
-        if (sum_non_S > N(i) || sum_non_S < 0) {
-            Logger::getInstance().warning(F_NAME, "Sum of initial compartments (" + std::to_string(sum_non_S) + ") is invalid for population N(" + std::to_string(i) + ") = " + std::to_string(N(i)));
-            return std::numeric_limits<double>::lowest();
-        }
-        initial_state_for_run(i) = N(i) - sum_non_S;
-    }
-
-    // Apply multipliers to all compartments (except S which is calculated as remainder)
-    initial_state_for_run.segment(1 * n_ages, n_ages) *= e0_mult;   // E
-    initial_state_for_run.segment(2 * n_ages, n_ages) *= p0_mult;   // P
-    initial_state_for_run.segment(3 * n_ages, n_ages) *= a0_mult;   // A
-    initial_state_for_run.segment(4 * n_ages, n_ages) *= i0_mult;   // I
-    initial_state_for_run.segment(5 * n_ages, n_ages) *= h0_mult;   // H
-    initial_state_for_run.segment(6 * n_ages, n_ages) *= icu0_mult; // ICU
-    initial_state_for_run.segment(7 * n_ages, n_ages) *= r0_mult;   // R
-    initial_state_for_run.segment(8 * n_ages, n_ages) *= d0_mult;   // D
-
-    // Recalculate S to maintain population constraint (S = N - sum of all other compartments)
-    for (int i = 0; i < n_ages; ++i) {
-        double sum_non_S = 0.0;
-        for (int j = 1; j < 9; ++j) { // Sum E through D
-            sum_non_S += initial_state_for_run(j * n_ages + i);
-        }
-        
-        if (sum_non_S > N(i) || sum_non_S < 0) {
-            Logger::getInstance().warning(F_NAME, "Sum of initial compartments (" + std::to_string(sum_non_S) + ") is invalid for population N(" + std::to_string(i) + ") = " + std::to_string(N(i)));
-            return std::numeric_limits<double>::lowest();
-        }
-        initial_state_for_run(i) = N(i) - sum_non_S;  // S compartment
-    }
+    // 3. Prepare initial state (Apply multipliers)
+    int n_ages = local_model->getNumAgeClasses();
+    Eigen::VectorXd init_state = initial_state_;
     
-    if (!cached_sim_data_.isValid(parameters)) {
-        //Logger::getInstance().debug(F_NAME, "Internal simulation data cache miss or invalid. Running simulation for parameters: " + formatParameters(parameters));
-        ensureSimulatorExists();
-        SimulationResult simulation_result;
-        try {
-            //Logger::getInstance().debug(F_NAME, "Running simulation.");
-            simulation_result = simulator_->run(initial_state_, time_points_);
-            if (!simulation_result.isValid()) {
-                Logger::getInstance().warning(F_NAME, "Produced an invalid simulation result for parameters: " + formatParameters(parameters));
-                cached_sim_data_.invalidate();
-                return std::numeric_limits<double>::lowest();
-            }
-            //Logger::getInstance().debug(F_NAME, "Simulation successful. Caching I, H, D data.");
-
-            int num_compartments = AgeSEPAIHRDSimulator::NUM_COMPARTMENTS;
-            cached_sim_data_.I_data = SimulationResultProcessor::getCompartmentData(
-                simulation_result, *model_, "I", num_compartments);
-            cached_sim_data_.H_data = SimulationResultProcessor::getCompartmentData(
-                simulation_result, *model_, "H", num_compartments);
-            cached_sim_data_.D_data = SimulationResultProcessor::getCompartmentData(
-                simulation_result, *model_, "D", num_compartments);
-            cached_sim_data_.parameters_cache_key = parameters;
-            cached_sim_data_.populated = true;
-
-        } catch (const std::exception& e) {
-            Logger::getInstance().warning(F_NAME, "Simulation failed. Error: " + std::string(e.what()) + ". Parameters: " + formatParameters(parameters));
-            cached_sim_data_.invalidate();
-            return std::numeric_limits<double>::lowest();
+    SEPAIHRDParameters current_model_params = local_model->getModelParameters();
+    
+    // Check if we're using run-up strategy (runup_days > 0)
+    double runup_days = current_model_params.runup_days;
+    double seed_exposed = current_model_params.seed_exposed;
+    
+    if (runup_days > 0 && seed_exposed > 0) {
+        // Run-up strategy: seed E compartment, zero out others
+        const Eigen::VectorXd& N = local_model->getPopulationSizes();
+        double total_pop = N.sum();
+        for (int i = 0; i < n_ages; ++i) {
+            double age_fraction = N(i) / total_pop;
+            init_state(i + n_ages) = seed_exposed * age_fraction;  // E compartment
+            init_state(i + 2*n_ages) = 0.0;  // P
+            init_state(i + 3*n_ages) = 0.0;  // A
+            init_state(i + 4*n_ages) = 0.0;  // I
+            init_state(i + 5*n_ages) = 0.0;  // H
+            init_state(i + 6*n_ages) = 0.0;  // ICU
+            init_state(i + 7*n_ages) = 0.0;  // R
+            init_state(i + 8*n_ages) = 0.0;  // D
+            init_state(i + 9*n_ages) = 0.0;  // CumH
+            init_state(i + 10*n_ages) = 0.0; // CumICU
         }
     } else {
-        Logger::getInstance().debug(F_NAME, "Using cached internal simulation data (I,H,D) for parameters: " + formatParameters(parameters));
+        // Original behavior: apply multipliers
+        init_state.segment(1*n_ages, n_ages) *= current_model_params.E0_multiplier;
+        init_state.segment(2*n_ages, n_ages) *= current_model_params.P0_multiplier;
+        init_state.segment(3*n_ages, n_ages) *= current_model_params.A0_multiplier;
+        init_state.segment(4*n_ages, n_ages) *= current_model_params.I0_multiplier;
+        init_state.segment(5*n_ages, n_ages) *= current_model_params.H0_multiplier;
+        init_state.segment(6*n_ages, n_ages) *= current_model_params.ICU0_multiplier;
+        init_state.segment(7*n_ages, n_ages) *= current_model_params.R0_multiplier;
+        init_state.segment(8*n_ages, n_ages) *= current_model_params.D0_multiplier;
     }
-    
-    if (simulated_hospitalizations_.rows() != static_cast<int>(time_points_.size()) || 
-        simulated_hospitalizations_.cols() != model_->getNumAgeClasses()) {
-        Logger::getInstance().warning(F_NAME, "Internal matrices incorrectly sized. Re-allocating. This should ideally not happen if constructor/preallocation worked.");
-        preallocateInternalMatrices(); 
-        if (simulated_hospitalizations_.rows() != static_cast<int>(time_points_.size()) || 
-            simulated_hospitalizations_.cols() != model_->getNumAgeClasses()) {
-             Logger::getInstance().error(F_NAME, "Failed to resize internal matrices. Aborting calculation.");
-             return std::numeric_limits<double>::lowest();
-        }
+
+    const Eigen::VectorXd& N = local_model->getPopulationSizes();
+    for (int i = 0; i < n_ages; ++i) {
+        double sum = 0;
+        for (int j=1; j<constants::NUM_COMPARTMENTS_SEPAIHRD; ++j) sum += init_state(j*n_ages+i);
+        if (sum > N(i)) return std::numeric_limits<double>::lowest();
+        init_state(i) = N(i) - sum;
     }
+
+    // 4. Run Simulation with Local Simulator
+    AgeSEPAIHRDSimulator local_simulator(local_model, solver_strategy_, time_points_.front(), time_points_.back(), 1.0, abs_err_, rel_err_);
+    auto res = local_simulator.run(init_state, time_points_);
     
-    try {
-        //Logger::getInstance().debug(F_NAME, "Extracting and calculating model-predicted incidence data using (potentially cached) I, H, D.");
-        int num_age_classes = model_->getNumAgeClasses();
-        int rows = static_cast<int>(time_points_.size());
-
-        Eigen::VectorXd h_rates = model_->getHospRate(); 
-        Eigen::VectorXd icu_admission_rates = model_->getIcuRate(); 
-        
-        simulated_hospitalizations_ = (cached_sim_data_.I_data.array().rowwise() * h_rates.transpose().array()).matrix();
-        simulated_icu_admissions_ = (cached_sim_data_.H_data.array().rowwise() * icu_admission_rates.transpose().array()).matrix();
-        
-        simulated_deaths_.setZero();
-        if (rows > 0) {
-            // This is D_cumulative(time_points[0]) - D_cumulative(initial_state_before_time_points[0])
-            simulated_deaths_.row(0) = cached_sim_data_.D_data.row(0) - 
-                                       initial_state_.segment(num_age_classes * AgeSEPAIHRDSimulator::D_COMPARTMENT_OFFSET, num_age_classes).transpose();
-            
-            // This is D_cumulative(time_points[t]) - D_cumulative(time_points[t-1])
-            if (rows > 1) {
-                simulated_deaths_.bottomRows(rows - 1) = cached_sim_data_.D_data.bottomRows(rows - 1) - 
-                                                         cached_sim_data_.D_data.topRows(rows - 1);
-            }
-            
-            simulated_deaths_ = simulated_deaths_.cwiseMax(0.0); 
-        }
-
-        //Logger::getInstance().debug(F_NAME, "Model-predicted incidence data calculation successful.");
-
-    } catch (const std::exception& e) {
-        Logger::getInstance().warning(F_NAME, "Failed to extract or calculate model-predicted incidence data. Error: " + std::string(e.what()) + ". Parameters: " + formatParameters(parameters));
+    if (!res.isValid()) {
         return std::numeric_limits<double>::lowest();
     }
-    
-    const Eigen::MatrixXd& observed_hospitalizations = observed_data_.getNewHospitalizations();
-    const Eigen::MatrixXd& observed_icu_admissions = observed_data_.getNewICU();
-    const Eigen::MatrixXd& observed_deaths = observed_data_.getNewDeaths();
 
-    auto future_ll_hosp = std::async(std::launch::async, [&]() {
-        return calculateSingleLogLikelihood(simulated_hospitalizations_, observed_hospitalizations, "Hospitalizations");
-    });
+    // 5. Process Results into Local Matrices
+    int nc = AgeSEPAIHRDSimulator::NUM_COMPARTMENTS;
+    // We can't use cached_sim_data_ here as it's shared.
+    Eigen::MatrixXd D_data = SimulationResultProcessor::getCompartmentData(res, *local_model, "D", nc);
+    Eigen::MatrixXd CumH_data = SimulationResultProcessor::getCompartmentData(res, *local_model, "CumH", nc);
+    Eigen::MatrixXd CumICU_data = SimulationResultProcessor::getCompartmentData(res, *local_model, "CumICU", nc);
 
-    auto future_ll_icu = std::async(std::launch::async, [&]() {
-        return calculateSingleLogLikelihood(simulated_icu_admissions_, observed_icu_admissions, "ICU Admissions");
-    });
-
-    double ll_deaths = calculateSingleLogLikelihood(simulated_deaths_, observed_deaths, "Deaths");
-    
-    double ll_hosp = future_ll_hosp.get();
-    double ll_icu = future_ll_icu.get();
-    
-    double total_ll = ll_hosp + ll_icu + ll_deaths;
-
-    // Check for NaN or infinity in total_ll, which can happen if individual LLs are lowest()
-    if (std::isnan(total_ll) || std::isinf(total_ll)) {
-        Logger::getInstance().warning(F_NAME, "Total log-likelihood is NaN or Inf. Parameters: " + formatParameters(parameters) +
-                                             ". Hosp: " + std::to_string(ll_hosp) +
-                                             ", ICU: " + std::to_string(ll_icu) +
-                                             ", Deaths: " + std::to_string(ll_deaths));
-        if (ll_hosp <= std::numeric_limits<double>::lowest() / 2.0 ||
-            ll_icu  <= std::numeric_limits<double>::lowest() / 2.0 ||
-            ll_deaths <= std::numeric_limits<double>::lowest() / 2.0 ) {
-             total_ll = std::numeric_limits<double>::lowest();
+    // === RUN-UP STRATEGY: Slice results to discard t < 0 ===
+    // Find the index where t >= 0 (the first observation time)
+    int runup_offset = 0;
+    for (size_t i = 0; i < time_points_.size(); ++i) {
+        if (time_points_[i] >= 0.0) {
+            runup_offset = static_cast<int>(i);
+            break;
         }
     }
     
-    /*std::ostringstream oss_ll;
-    oss_ll << "Total LL: " << total_ll << " (Hosp: " << ll_hosp << ", ICU: " << ll_icu << ", Deaths: " << ll_deaths << ") for parameters: " << formatParameters(parameters);
-    Logger::getInstance().debug(F_NAME, oss_ll.str());*/
+    // Number of observation points (t >= 0)
+    int num_obs_points = static_cast<int>(time_points_.size()) - runup_offset;
     
-    cache_.storeLikelihood(cache_key_likelihood, total_ll);
-    /*Logger::getInstance().debug(F_NAME, "Likelihood " + std::to_string(total_ll) + " stored in main cache for key: " + cache_key_likelihood);*/
+    // Validate dimensions match observed data
+    if (num_obs_points != observed_data_.getNewDeaths().rows()) {
+        return std::numeric_limits<double>::lowest();
+    }
+
+    // Calculate Derived Metrics (Daily Incidence from Cumulative States)
+    // Work with full simulation data first, then slice
+    Eigen::MatrixXd full_sim_hosp(CumH_data.rows(), CumH_data.cols());
+    Eigen::MatrixXd full_sim_icu(CumICU_data.rows(), CumICU_data.cols());
     
-    return total_ll;
+    if (!time_points_.empty()) {
+        // First row: Cum(t0) - Cum_initial (where t0 is -runup_days)
+        full_sim_hosp.row(0) = CumH_data.row(0) - init_state.segment(n_ages * 9, n_ages).transpose();
+        full_sim_icu.row(0) = CumICU_data.row(0) - init_state.segment(n_ages * 10, n_ages).transpose();
+        
+        // Subsequent rows: Cum(t) - Cum(t-1)
+        if (time_points_.size() > 1) {
+             full_sim_hosp.bottomRows(time_points_.size()-1) = CumH_data.bottomRows(time_points_.size()-1) - CumH_data.topRows(time_points_.size()-1);
+             full_sim_icu.bottomRows(time_points_.size()-1) = CumICU_data.bottomRows(time_points_.size()-1) - CumICU_data.topRows(time_points_.size()-1);
+        }
+        
+        // Ensure non-negative
+        full_sim_hosp = full_sim_hosp.cwiseMax(0.0);
+        full_sim_icu = full_sim_icu.cwiseMax(0.0);
+    } else {
+        full_sim_hosp.setZero(CumH_data.rows(), CumH_data.cols());
+        full_sim_icu.setZero(CumICU_data.rows(), CumICU_data.cols());
+    }
+    
+    Eigen::MatrixXd full_sim_deaths;
+    if (!time_points_.empty()) {
+        full_sim_deaths.resize(D_data.rows(), D_data.cols());
+        full_sim_deaths.row(0) = D_data.row(0) - init_state.segment(n_ages * 8, n_ages).transpose();
+        if (time_points_.size() > 1) {
+             full_sim_deaths.bottomRows(time_points_.size()-1) = D_data.bottomRows(time_points_.size()-1) - D_data.topRows(time_points_.size()-1);
+        }
+        full_sim_deaths = full_sim_deaths.cwiseMax(0.0);
+    } else {
+        full_sim_deaths.setZero(D_data.rows(), D_data.cols());
+    }
+
+    // Slice to get only t >= 0 data for likelihood calculation
+    Eigen::MatrixXd local_sim_hosp = full_sim_hosp.bottomRows(num_obs_points);
+    Eigen::MatrixXd local_sim_icu = full_sim_icu.bottomRows(num_obs_points);
+    Eigen::MatrixXd local_sim_deaths = full_sim_deaths.bottomRows(num_obs_points);
+
+    // 6. Calculate Likelihood (Parallelized)
+    auto f_hosp = std::async(std::launch::async, [&]{ 
+        return calculateSingleLogLikelihood(local_sim_hosp, observed_data_.getNewHospitalizations(), "H"); 
+    });
+    auto f_icu = std::async(std::launch::async, [&]{ 
+        return calculateSingleLogLikelihood(local_sim_icu, observed_data_.getNewICU(), "ICU"); 
+    });
+    
+    double ll_deaths = calculateSingleLogLikelihood(local_sim_deaths, observed_data_.getNewDeaths(), "D");
+    double total = f_hosp.get() + f_icu.get() + ll_deaths;
+
+    if (std::isnan(total) || std::isinf(total)) total = std::numeric_limits<double>::lowest();
+    
+    cache_.storeLikelihood(cache_key, total);
+    return total;
 }
 
 const std::vector<std::string>& SEPAIHRDObjectiveFunction::getParameterNames() const {
     return parameterManager_.getParameterNames();
 }
 
+// *** OPENMP PARALLELIZED LOG-LIKELIHOOD ***
 double SEPAIHRDObjectiveFunction::calculateSingleLogLikelihood(
     const Eigen::MatrixXd& simulated,
     const Eigen::MatrixXd& observed,
-    const std::string& dataTypeForLog) const
+    const std::string& dataType) const
 {
-    const std::string F_NAME = "SEPAIHRDObjectiveFunction::calculateSingleLogLikelihood (" + dataTypeForLog + ")";
+    (void)dataType; // Unused parameter
     if (simulated.rows() != observed.rows() || simulated.cols() != observed.cols()) {
-        std::ostringstream oss;
-        oss << "Dimension mismatch. Simulated (" << simulated.rows() << "x" << simulated.cols()
-            << ") vs Observed (" << observed.rows() << "x" << observed.cols() << ").";
-        Logger::getInstance().error(F_NAME, oss.str());
-        THROW_INVALID_PARAM("calculateSingleLogLikelihood", "Dimension mismatch for " + dataTypeForLog + ". " + oss.str());
+        return std::numeric_limits<double>::lowest();
     }
-    
+
     const double epsilon = 1e-10;
-    
-    Eigen::Array<bool, Eigen::Dynamic, Eigen::Dynamic> valid_mask_array = 
-        (observed.array() >= 0) && observed.array().isFinite();
-    
-    long long total_elements = observed.size();
-    long long valid_points = valid_mask_array.count();
-    long long skipped_points = total_elements - valid_points;
-
-    if (skipped_points > 0) {
-        Logger::getInstance().debug(F_NAME, "Skipped " + std::to_string(skipped_points) + " invalid (negative or NaN/Inf) observed data points out of " + std::to_string(total_elements) + " total.");
-    }
-
-    if (valid_points == 0) {
-        Logger::getInstance().warning(F_NAME, "No valid data points found for likelihood calculation.");
-        return std::numeric_limits<double>::lowest() / 3.0;
-    }
-
-    Eigen::MatrixXd sim_safe = simulated.cwiseMax(0.0).array() + epsilon;
+    const int rows = observed.rows();
+    const int cols = observed.cols();
     
     double log_likelihood = 0.0;
 
-    Eigen::MatrixXd term1 = observed.array() * sim_safe.array().log();
-    Eigen::MatrixXd term2 = sim_safe;
-    Eigen::MatrixXd log_likelihood_terms = term1 - term2;
-
-    for (int i = 0; i < observed.rows(); ++i) {
-        for (int j = 0; j < observed.cols(); ++j) {
-            if (valid_mask_array(i, j)) {
-                log_likelihood += log_likelihood_terms(i, j);
+    // Flattened loop for OpenMP
+    #pragma omp parallel for reduction(+:log_likelihood)
+    for (int i = 0; i < rows; ++i) {
+        double row_sum = 0.0;
+        for (int j = 0; j < cols; ++j) {
+            double obs = observed(i, j);
+            // Check validity mask equivalent (obs >= 0 && finite)
+            if (obs >= 0 && std::isfinite(obs)) {
+                double sim = simulated(i, j);
+                if (sim < 0) sim = 0.0;
+                sim += epsilon;
+                
+                // Poisson LL: y * log(m) - m
+                row_sum += (obs * std::log(sim) - sim);
             }
         }
-    }
-    
-    if (std::isnan(log_likelihood) || std::isinf(log_likelihood)) {
-         Logger::getInstance().warning(F_NAME, "Log-likelihood is NaN or Inf after calculation. LL: " + std::to_string(log_likelihood) + ". Valid points: " + std::to_string(valid_points));
-         return std::numeric_limits<double>::lowest() / 3.0;
+        log_likelihood += row_sum;
     }
 
-    //Logger::getInstance().debug(F_NAME, "Calculated LL: " + std::to_string(log_likelihood) + " from " + std::to_string(valid_points) + " valid points.");
-    
     return log_likelihood;
 }
 
 void SEPAIHRDObjectiveFunction::ensureSimulatorExists() const {
-    const std::string F_NAME = "SEPAIHRDObjectiveFunction::ensureSimulatorExists";
     if (!simulator_) {
-        Logger::getInstance().debug(F_NAME, "Simulator instance not found, creating new instance.");
-        if (time_points_.empty()) {
-             Logger::getInstance().fatal(F_NAME, "Cannot create simulator: time_points_ is empty.");
-             throw SimulationException("SEPAIHRDObjectiveFunction::ensureSimulatorExists", "Time points vector is empty, cannot determine simulation range.");
-        }
-        try {
-            double start_time = time_points_.front();
-            double end_time = time_points_.back();
-            double time_step = 1.0;
-            if (time_points_.size() > 1) {
-                time_step = time_points_[1] - time_points_[0];
-                if (time_step <= 0) {
-                    Logger::getInstance().warning(F_NAME, "Calculated time step is not positive (" + std::to_string(time_step) + "). Defaulting to 1.0.");
-                    time_step = 1.0;
-                }
-            } else if (time_points_.size() == 1) {
-                 Logger::getInstance().debug(F_NAME, "Only one time point provided. Setting time_step to 1.0 for simulator (may not be used if end_time == start_time).");
-            }
-            
-            simulator_ = std::make_unique<AgeSEPAIHRDSimulator>(
-                model_, 
-                solver_strategy_, 
-                start_time, 
-                end_time, 
-                time_step, 
-                abs_err_, 
-                rel_err_
-            );
-           Logger::getInstance().info(F_NAME, "Simulator instance created successfully.");
-        } catch (const std::exception& e) {
-            Logger::getInstance().fatal(F_NAME, "Failed to create simulator instance. Error: " + std::string(e.what()));
-            throw SimulationException("SEPAIHRDObjectiveFunction::ensureSimulatorExists",
-                                      std::string("Failed to create simulator: ") + e.what());
-        }
+        if (time_points_.empty()) throw std::runtime_error("No time points");
+        simulator_ = std::make_unique<AgeSEPAIHRDSimulator>(model_, solver_strategy_, time_points_.front(), time_points_.back(), 1.0, abs_err_, rel_err_);
     }
 }
 
