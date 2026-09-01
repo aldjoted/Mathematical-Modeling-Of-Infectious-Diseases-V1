@@ -248,14 +248,20 @@ namespace epidemic {
     
     int AgeSEPAIHRDModel::getStateSize() const { return constants::NUM_COMPARTMENTS_SEPAIHRD * num_age_classes; }
     
-    std::vector<std::string> AgeSEPAIHRDModel::getStateNames() const {        
-        std::vector<std::string> names;
-        names.reserve(constants::NUM_COMPARTMENTS_SEPAIHRD * num_age_classes);
-        static const std::vector<std::string> compartments = {"S", "E", "P", "A", "I", "H", "ICU", "R", "D", "CumH", "CumICU"};
-        for (const auto& comp : compartments) {
-            for (int i = 0; i < num_age_classes; ++i) names.push_back(comp + std::to_string(i));
+    std::vector<std::string> AgeSEPAIHRDModel::getStateNames() const {
+        // Built once and memoised: the names depend only on num_age_classes, but this is
+        // called from the calibration hot path (once per compartment extraction), where
+        // rebuilding 11 * num_age_classes strings dominated the objective evaluation.
+        if (cached_state_names_.empty()) {
+            std::vector<std::string> names;
+            names.reserve(constants::NUM_COMPARTMENTS_SEPAIHRD * num_age_classes);
+            static const std::vector<std::string> compartments = {"S", "E", "P", "A", "I", "H", "ICU", "R", "D", "CumH", "CumICU"};
+            for (const auto& comp : compartments) {
+                for (int i = 0; i < num_age_classes; ++i) names.push_back(comp + std::to_string(i));
+            }
+            cached_state_names_ = std::move(names);
         }
-        return names;
+        return cached_state_names_;
     }
     
     int AgeSEPAIHRDModel::getNumAgeClasses() const { return num_age_classes; }

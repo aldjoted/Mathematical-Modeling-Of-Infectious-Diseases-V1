@@ -9,9 +9,11 @@ namespace epidemic {
 
 SimulationRunner::SimulationRunner(
     std::shared_ptr<AgeSEPAIHRDModel> model_template,
-    std::shared_ptr<IOdeSolverStrategy> solver)
+    std::shared_ptr<IOdeSolverStrategy> solver,
+    std::size_t max_cache_entries)
     : model_template_(model_template),
-      solver_(solver) {
+      solver_(solver),
+      max_cache_entries_(max_cache_entries) {
     
     if (!model_template_) {
         throw std::invalid_argument("SimulationRunner: Model template cannot be null");
@@ -95,7 +97,16 @@ SimulationResult SimulationRunner::runSimulation(
     SimulationResult result = simulator.run(initial_state, time_points);
     
     if (result.isValid()) {
-        cache_[cache_key] = result;
+        if (max_cache_entries_ > 0) {
+            // Evict oldest entries first so the retained trajectory set stays bounded.
+            while (cache_.size() >= max_cache_entries_ && !cache_order_.empty()) {
+                cache_.erase(cache_order_.front());
+                cache_order_.pop_front();
+            }
+            if (cache_.emplace(cache_key, result).second) {
+                cache_order_.push_back(cache_key);
+            }
+        }
     } else {
         Logger::getInstance().warning("SimulationRunner", "Invalid simulation result - not cached");
     }
@@ -105,6 +116,7 @@ SimulationResult SimulationRunner::runSimulation(
 
 void SimulationRunner::clearCache() {
     cache_.clear();
+    cache_order_.clear();
     cache_hits_ = 0;
     total_calls_ = 0;
     Logger::getInstance().info("SimulationRunner", "Cache cleared");

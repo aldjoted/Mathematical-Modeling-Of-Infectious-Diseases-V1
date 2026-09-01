@@ -16,6 +16,7 @@
 #include <mutex>
 
 namespace epidemic { class SEPAIHRDParameterManager; }
+namespace epidemic { class SimulationCache; }
 
 namespace epidemic {
 
@@ -80,8 +81,8 @@ namespace epidemic {
          *
          * This method uses a small epsilon to avoid issues with log(0) and skips negative or NaN values in observed data.
          */
-        double calculateSingleLogLikelihood(const Eigen::MatrixXd& simulated,
-                                            const Eigen::MatrixXd& observed,
+        double calculateSingleLogLikelihood(const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>>& simulated,
+                                            const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>>& observed,
                                             const std::string& dataTypeForLog) const;
 
         /** @brief Reference to the manager for model parameters. */
@@ -107,6 +108,13 @@ namespace epidemic {
     private:
         // Cached cast to avoid dynamic_cast in the hot loop.
         SEPAIHRDParameterManager* sepaihrd_manager_ = nullptr;
+
+        /**
+         * @brief Cached downcast of cache_ to the hash-keyed fast path, resolved once at
+         * construction. Previously re-derived with dynamic_cast on every evaluation.
+         * Null when the injected cache only supports the string-keyed interface.
+         */
+        SimulationCache* fast_cache_ = nullptr;
 
         // Precomputed indices for run-up handling.
         int runup_offset_ = 0;
