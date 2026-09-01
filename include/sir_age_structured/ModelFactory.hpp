@@ -90,8 +90,10 @@ namespace epidemic {
             /**
              * @brief Creates the initial state vector for an age-structured SEPAIHRD model.
              *
-             * Concatenates all compartment vectors (S0, E0, P0, A0, I0, H0, ICU0, R0, D0)
-             * into a single state vector. Performs validation to ensure:
+             * State layout (per age class): S, E, P, A, I, H, ICU, R, D, CumH, CumICU.
+             * This helper takes S0..D0 and initializes CumH and CumICU to 0.
+             *
+             * Performs validation to ensure:
              * - All vectors have identical, non-zero dimensions
              * - All values are non-negative
              *
@@ -104,7 +106,7 @@ namespace epidemic {
              * @param ICU0 Initial ICU populations by age group.
              * @param R0 Initial recovered populations by age group.
              * @param D0 Initial deceased populations by age group.
-             * @return Eigen::VectorXd Combined state vector [S0, E0, P0, A0, I0, H0, ICU0, R0, D0] suitable for simulation.
+             * @return Eigen::VectorXd Combined state vector [S0, E0, P0, A0, I0, H0, ICU0, R0, D0, CumH0, CumICU0].
              *
              * @throws InvalidParameterException If vectors have mismatched dimensions, are empty,
              *         or contain negative values.
@@ -121,4 +123,5 @@ namespace epidemic {
                 const Eigen::VectorXd& D0);
     };
 } // namespace epidemic
+
 #endif // MODEL_FACTORY

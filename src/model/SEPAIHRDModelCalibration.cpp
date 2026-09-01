@@ -48,9 +48,8 @@ SEPAIHRDModelCalibration::SEPAIHRDModelCalibration(
              THROW_INVALID_PARAM("SEPAIHRDModelCalibration", "Initial state derived from calibration data is empty.");
         }
 
-        // Validate initial state size matches model expectations
         int num_age_classes = model_->getNumAgeClasses();
-        int expected_size = num_age_classes * constants::NUM_COMPARTMENTS_SEPAIHRD; // 11 compartments
+        int expected_size = num_age_classes * constants::NUM_COMPARTMENTS_SEPAIHRD;
         
         if (initial_state_cached_.size() != expected_size) {
              THROW_INVALID_PARAM("SEPAIHRDModelCalibration", 
@@ -75,7 +74,6 @@ ModelCalibrator SEPAIHRDModelCalibration::setupCalibrator(
     std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> algorithms)
 {
 
-    // Check if any algorithm requires gradients
     bool needs_gradient = false;
     for (const auto& [name, algo] : algorithms) {
         if (dynamic_cast<NUTSSampler*>(algo.get())) {
@@ -217,8 +215,6 @@ ModelCalibrator SEPAIHRDModelCalibration::runNUTS(
     auto nuts_sampler = std::make_unique<NUTSSampler>();
 
     std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> optimization_algorithms;
-    // NUTS is a sampler, so it's conceptually a "Phase 2" algorithm like MCMC.
-    // We'll run it as the only phase.
     optimization_algorithms[ModelCalibrator::PHASE2_NAME] = std::move(nuts_sampler);
 
     ModelCalibrator calibrator = setupCalibrator(std::move(optimization_algorithms));

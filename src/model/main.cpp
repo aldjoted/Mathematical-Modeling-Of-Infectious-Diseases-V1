@@ -270,33 +270,27 @@ int main(int argc, char* argv[]) {
         Eigen::VectorXd initial_state = initial_state_original;
         int n_ages = num_age_classes;
 
-        // === RUN-UP STRATEGY: Seed Exposed Compartment ===
-        // When using run-up (starting at t=-runup_days), we seed the E compartment
-        // with seed_exposed individuals distributed proportionally by population.
-        // Other compartments start near zero since we're before the epidemic start.
+        // Run-up strategy: seed E compartment at t=-runup_days; other compartments start near zero
         if (runup_days > 0 && seed_exposed > 0) {
             Logger::getInstance().info("main", "Applying run-up seeding strategy: " + 
                 std::to_string(seed_exposed) + " exposed individuals at t=-" + std::to_string(runup_days));
             
-            // Reset all infectious compartments to near-zero for run-up start
-            // Keep population in S, seed E proportionally by population
             double total_pop = N.sum();
             for (int i = 0; i < n_ages; ++i) {
-                // Proportional seeding by population size
                 double age_fraction = N(i) / total_pop;
-                initial_state(i + n_ages) = seed_exposed * age_fraction;  // E compartment
-                initial_state(i + 2*n_ages) = 0.0;  // P compartment
-                initial_state(i + 3*n_ages) = 0.0;  // A compartment  
-                initial_state(i + 4*n_ages) = 0.0;  // I compartment
-                initial_state(i + 5*n_ages) = 0.0;  // H compartment
-                initial_state(i + 6*n_ages) = 0.0;  // ICU compartment
-                initial_state(i + 7*n_ages) = 0.0;  // R compartment
-                initial_state(i + 8*n_ages) = 0.0;  // D compartment
-                initial_state(i + 9*n_ages) = 0.0;  // CumH compartment
-                initial_state(i + 10*n_ages) = 0.0; // CumICU compartment
+                initial_state(i + n_ages) = seed_exposed * age_fraction;  // E
+                initial_state(i + 2*n_ages) = 0.0;  // P
+                initial_state(i + 3*n_ages) = 0.0;  // A
+                initial_state(i + 4*n_ages) = 0.0;  // I
+                initial_state(i + 5*n_ages) = 0.0;  // H
+                initial_state(i + 6*n_ages) = 0.0;  // ICU
+                initial_state(i + 7*n_ages) = 0.0;  // R
+                initial_state(i + 8*n_ages) = 0.0;  // D
+                initial_state(i + 9*n_ages) = 0.0;  // CumH
+                initial_state(i + 10*n_ages) = 0.0; // CumICU
             }
         } else {
-            // Original behavior without run-up: Apply initial state multipliers from configuration
+            // Apply initial state multipliers from configuration
             initial_state.segment(1*n_ages, n_ages) *= params.E0_multiplier;
             initial_state.segment(2*n_ages, n_ages) *= params.P0_multiplier;
             initial_state.segment(3*n_ages, n_ages) *= params.A0_multiplier;
@@ -309,7 +303,8 @@ int main(int argc, char* argv[]) {
 
         for (int i = 0; i < n_ages; ++i) {
             double sum_non_S = 0.0;
-            for (int j = 1; j < constants::NUM_COMPARTMENTS_SEPAIHRD; ++j) {
+            // Only sum compartments that represent people (exclude CumH/CumICU).
+            for (int j = 1; j < constants::NUM_POPULATION_COMPARTMENTS_SEPAIHRD; ++j) {
                 sum_non_S += initial_state(j * n_ages + i);
             }
             if (sum_non_S > N(i)) {

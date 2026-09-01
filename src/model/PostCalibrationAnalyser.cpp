@@ -108,31 +108,24 @@ void PostCalibrationAnalyser::generateFullReport(
         param_manager.updateModelParameters(mean_params);
         SEPAIHRDParameters baseline_params = model_template_->getModelParameters();
         
-        // Define scenarios
-        // FIX Bug 9: Properly handle kappa modification
-        // kappa_values[0] is typically the baseline (kappa_1 = 1.0), which is fixed
-        // We want to modify the first calibratable NPI parameter (kappa_values[1] = kappa_2)
-        // to simulate stricter/weaker lockdown effects
+        // Define scenarios modifying the first calibratable NPI parameter
         std::vector<std::pair<std::string, SEPAIHRDParameters>> scenarios;
         
-        // Get NPI strategy to check which kappa indices are calibratable
         auto npi_strategy = model_template_->getNpiStrategy();
-        size_t first_modifiable_idx = 1; // Default: assume first is baseline
+        size_t first_modifiable_idx = 1;
         
-        // If we have access to isBaselineFixed(), use it
         auto piecewise_npi = std::dynamic_pointer_cast<PiecewiseConstantNpiStrategy>(npi_strategy);
         if (piecewise_npi && !piecewise_npi->isBaselineFixed()) {
-            first_modifiable_idx = 0; // If baseline not fixed, start from 0
+            first_modifiable_idx = 0;
         }
         
-        // Ensure we have enough kappa values to modify
         if (baseline_params.kappa_values.size() > first_modifiable_idx) {
             SEPAIHRDParameters stricter_params = baseline_params;
-            stricter_params.kappa_values[first_modifiable_idx] *= 0.9; // 10% reduction (stricter)
+            stricter_params.kappa_values[first_modifiable_idx] *= 0.9;
             scenarios.push_back({"stricter_lockdown", stricter_params});
             
             SEPAIHRDParameters weaker_params = baseline_params;
-            weaker_params.kappa_values[first_modifiable_idx] *= 1.1; // 10% increase (weaker)
+            weaker_params.kappa_values[first_modifiable_idx] *= 1.1;
             scenarios.push_back({"weaker_lockdown", weaker_params});
             
             Logger::getInstance().info("PostCalibrationAnalyser", 
@@ -158,11 +151,8 @@ EssentialMetrics PostCalibrationAnalyser::analyzeSingleRunLightweight(
     const SEPAIHRDParameters& params,
     const std::string& run_id) {
     
-    // FIX Bug 7: Use run_id parameter for logging
-    Logger::getInstance().debug("PostCalibrationAnalyser", 
-        "Analyzing run: " + run_id);
+    Logger::getInstance().debug("PostCalibrationAnalyser", "Analyzing run: " + run_id);
     
-    // Delegate simulation to runner (with caching)
     SimulationResult sim_result = runner_->runSimulation(params, initial_state_, time_points_);
     
     if (!sim_result.isValid()) {
@@ -170,11 +160,9 @@ EssentialMetrics PostCalibrationAnalyser::analyzeSingleRunLightweight(
             "Invalid simulation result for run: " + run_id);
     }
     
-    // Get model instance for R0/Rt calculation
     auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
     auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
     
-    // Delegate metrics calculation
     EssentialMetrics metrics = metrics_calculator_->calculateEssentialMetrics(
         sim_result, run_model, params, initial_state_, time_points_
     );
@@ -203,22 +191,14 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
     
     Logger::getInstance().info("PostCalibrationAnalyser", "Starting batch processing with in-memory aggregation...");
     
-    // Create output directories
     ensureOutputSubdirectoryExists("mcmc_batches");
-    // ensureOutputSubdirectoryExists("mcmc_batches/rt_runs"); // No longer needed
-    // ensureOutputSubdirectoryExists("mcmc_batches/sero_runs"); // No longer needed
     ensureOutputSubdirectoryExists("mcmc_aggregated");
     
-    // Batch processing with in-memory aggregation
     std::vector<EssentialMetrics> batch_metrics_buffer;
     batch_metrics_buffer.reserve(batch_size);
     std::vector<std::map<std::string, AggregatedStats>> all_batch_stats;
     
-    // In-memory trajectory accumulators
-    // We will store all trajectories here and aggregate them at the end
-    // Note: For very large MCMC runs, this might consume significant memory.
-    // If memory is an issue, we would need to implement incremental aggregation (Welford's algorithm or P-Square)
-    // For now, storing vectors of doubles is much better than writing thousands of files.
+    // In-memory trajectory accumulators (trading memory for I/O efficiency)
     std::vector<std::vector<double>> all_rt_trajectories;
     std::vector<std::vector<double>> all_sero_trajectories;
     all_rt_trajectories.reserve(total_samples - effective_start);
@@ -228,20 +208,16 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
     int processed_samples = 0;
     
     for (int i = effective_start; i < total_samples; i += thinning) {
-        // 1. Get parameters
-        // Fix: Ensure model_template_ is updated with the correct parameters
-        // Try to cast to SEPAIHRDParameterManager to use the explicit update method
+        // Update model with current sample parameters
         auto* sepaihrd_pm = dynamic_cast<SEPAIHRDParameterManager*>(&param_manager);
         if (sepaihrd_pm) {
             sepaihrd_pm->updateModelParameters(param_samples[i], model_template_);
         } else {
-            // Fallback: Update via interface and hope it updates the correct model instance
             param_manager.updateModelParameters(param_samples[i]);
         }
         
         SEPAIHRDParameters params = model_template_->getModelParameters();
         
-        // 2. Run simulation (uses cache via runner)
         SimulationResult sim_result = runner_->runSimulation(params, initial_state_, time_points_);
         
         if (!sim_result.isValid()) {
@@ -250,17 +226,14 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
             continue;
         }
         
-        // 3. Get model for trajectory calculations
         auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
         auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
         
-        // 4. Calculate essential metrics (delegate to calculator)
         EssentialMetrics metrics = metrics_calculator_->calculateEssentialMetrics(
             sim_result, run_model, params, initial_state_, time_points_
         );
         batch_metrics_buffer.push_back(metrics);
         
-        // 5. Calculate and accumulate trajectories in memory
         auto rt_trajectory = metrics_calculator_->calculateRtTrajectory(
             sim_result, run_model, time_points_
         );
@@ -273,11 +246,9 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
         
         processed_samples++;
         
-        // 6. When batch buffer is full or last sample
         if (batch_metrics_buffer.size() >= static_cast<size_t>(batch_size) || 
             i + thinning >= total_samples) {
             
-            // 7. (Optional) Asynchronously save raw batch data
             writer_->saveBatchMetrics(
                 FileUtils::joinPaths(output_dir_base_, 
                     "mcmc_batches/batch_" + std::to_string(batch_count) + ".csv"),
@@ -285,7 +256,6 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
                 num_age_classes_
             );
             
-            // 8. Aggregate batch IN-MEMORY (delegate to aggregator)
             auto batch_stats = aggregator_->aggregateBatchMetrics(
                 batch_metrics_buffer, num_age_classes_
             );
@@ -295,7 +265,6 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
                 "Completed batch " + std::to_string(batch_count) + 
                 " (" + std::to_string(processed_samples) + " samples processed)");
             
-            // Clear batch buffer
             batch_metrics_buffer.clear();
             batch_count++;
         }
@@ -306,35 +275,31 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
         }
     }
     
-    // 9. Final in-memory aggregation across all batches
+    // Final aggregation across all batches
     Logger::getInstance().info("PostCalibrationAnalyser", 
         "Aggregating results from " + std::to_string(batch_count) + " batches...");
     auto final_summary = aggregator_->aggregateAllBatches(all_batch_stats);
     
-    // 10. Asynchronously save final summary
     writer_->saveAggregatedSummary(
         FileUtils::joinPaths(output_dir_base_, "mcmc_aggregated/metrics_summary.csv"),
         final_summary
     );
     
-    // 11. Run ENE-COVID validation on in-memory summary
     ensureOutputSubdirectoryExists("seroprevalence");
     auto ene_covid_data = aggregator_->performENECOVIDValidation(
         final_summary,
-        64.0,   // target_day
-        0.048,  // ene_covid_mean
-        0.043,  // ene_covid_lower_ci
-        0.054   // ene_covid_upper_ci
+        64.0,
+        0.048,
+        0.043,
+        0.054
     );
     writer_->saveEneCovidValidation(
         FileUtils::joinPaths(output_dir_base_, "seroprevalence/ene_covid_validation.csv"),
         ene_covid_data
     );
     
-    // 12. Aggregate trajectories from memory and save
     ensureOutputSubdirectoryExists("rt_trajectories");
     
-    // Helper lambda for trajectory aggregation
     auto aggregateAndSaveTrajectory = [&](const std::vector<std::vector<double>>& trajectories, const std::string& filepath) {
         if (trajectories.empty()) return;
         
@@ -377,11 +342,9 @@ void PostCalibrationAnalyser::analyzeMCMCRunsInBatches(
     aggregateAndSaveTrajectory(all_rt_trajectories, FileUtils::joinPaths(output_dir_base_, "rt_trajectories/Rt_aggregated_with_uncertainty.csv"));
     aggregateAndSaveTrajectory(all_sero_trajectories, FileUtils::joinPaths(output_dir_base_, "seroprevalence/seroprevalence_trajectory.csv"));
     
-    // 13. Wait for all I/O to finish
     Logger::getInstance().info("PostCalibrationAnalyser", "Waiting for async I/O to complete...");
     writer_->waitForCompletion();
     
-    // Log cache statistics
     auto [cache_hits, total_calls] = runner_->getCacheStats();
     Logger::getInstance().info("PostCalibrationAnalyser", 
         "Simulation cache stats: " + std::to_string(cache_hits) + "/" + 
@@ -416,30 +379,25 @@ void PostCalibrationAnalyser::performScenarioAnalysisOptimized(
     const SEPAIHRDParameters& baseline_params,
     const std::vector<std::pair<std::string, SEPAIHRDParameters>>& scenarios) {
     
-    Logger::getInstance().info("PostCalibrationAnalyser", "Starting orchestrated scenario analysis...");
+    Logger::getInstance().info("PostCalibrationAnalyser", "Starting scenario analysis...");
     
-    // Analyze baseline
     EssentialMetrics baseline_metrics = analyzeSingleRunLightweight(baseline_params, "baseline");
     
-    // Prepare scenario comparison data
     std::vector<std::pair<std::string, EssentialMetrics>> scenario_results;
     scenario_results.push_back({"baseline", baseline_metrics});
     
-    // Process scenarios
     for (const auto& [scenario_name, scenario_params] : scenarios) {
         Logger::getInstance().info("PostCalibrationAnalyser", "Analyzing scenario: " + scenario_name);
         EssentialMetrics scenario_metrics = analyzeSingleRunLightweight(scenario_params, scenario_name);
         scenario_results.push_back({scenario_name, scenario_metrics});
     }
     
-    // Delegate async file writing to writer
     writer_->saveScenarioComparison(
         FileUtils::joinPaths(output_dir_base_, "scenarios/scenario_comparison.csv"),
         scenario_results
     );
-    
         
-    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario analysis queued for async save");
+    Logger::getInstance().info("PostCalibrationAnalyser", "Scenario analysis completed");
 }
 
 void PostCalibrationAnalyser::ensureOutputSubdirectoryExists(const std::string& subdir_name) {

@@ -40,19 +40,19 @@ h_2 0.01
 h_3 0.01
 
 icu_0 0.0008
-icu_1 0.005
-icu_2 0.01
+icu_1 0.006
+icu_2 0.015
 icu_3 0.001
 
 d_H_0 0.001
-d_H_1 0.002
-d_H_2 0.008
-d_H_3 0.01
+d_H_1 0.003
+d_H_2 0.012
+d_H_3 0.03
 
 d_ICU_0 0.01
 d_ICU_1 0.01
-d_ICU_2 0.02
-d_ICU_3 0.03
+d_ICU_2 0.03
+d_ICU_3 0.05
 
 # Multipliers & Run-Up
 E0_multiplier   0.05

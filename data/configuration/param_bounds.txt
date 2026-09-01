@@ -45,21 +45,21 @@ h_3   0.3  0.60
 
 # --- Age-Specific: ICU Admission (icu) ---
 icu_0   0.002  0.10
-icu_1   0.035  0.15
-icu_2   0.06   0.20
+icu_1   0.01   0.15
+icu_2   0.02   0.20
 icu_3   0.00   0.05
 
 # --- Age-Specific: Hospital Mortality (d_H) ---
 d_H_0   0.00  0.02
 d_H_1   0.00  0.05
-d_H_2   0.10  0.25
-d_H_3   0.40  0.70
+d_H_2   0.03  0.25
+d_H_3   0.15  0.70
 
 # --- Age-Specific: ICU Mortality (d_ICU) ---
 d_ICU_0 0.00 0.20
-d_ICU_1 0.05 0.30
-d_ICU_2 0.20 0.60
-d_ICU_3 0.40 0.90
+d_ICU_1 0.02 0.30
+d_ICU_2 0.10 0.60
+d_ICU_3 0.20 0.90
 
 # --- Initial State Multipliers ---
 E0_multiplier   0.5  3.0

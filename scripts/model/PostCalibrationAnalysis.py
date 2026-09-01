@@ -505,31 +505,31 @@ class SEPAIHRDAnalyzer:
             
             <h2>1. Model Fit (Posterior Predictive Checks)</h2>
             <div class="figure-container">
-                <div class="figure"><img src="PostCalibrationFigures/ppc_daily_hospitalizations.png"><p class="description">Daily Hospitalizations</p></div>
-                <div class="figure"><img src="PostCalibrationFigures/ppc_daily_deaths.png"><p class="description">Daily Deaths</p></div>
+                <div class="figure"><img src="ppc_daily_hospitalizations.png"><p class="description">Daily Hospitalizations</p></div>
+                <div class="figure"><img src="ppc_daily_deaths.png"><p class="description">Daily Deaths</p></div>
             </div>
 
             <h2>2. Age-Stratified Dynamics</h2>
             <p>Breakdown of dynamics by age group to identify high-risk populations.</p>
             <div class="figure-container">
-                <div class="figure"><img src="PostCalibrationFigures/age_stratified_daily_hospitalizations.png"><p class="description">Hospitalizations by Age</p></div>
-                <div class="figure"><img src="PostCalibrationFigures/age_stratified_daily_deaths.png"><p class="description">Deaths by Age</p></div>
-                <div class="figure"><img src="PostCalibrationFigures/age_specific_severity_metrics_bar_CI.png"><p class="description">Severity Rates (IFR/IHR)</p></div>
+                <div class="figure"><img src="age_stratified_daily_hospitalizations.png"><p class="description">Hospitalizations by Age</p></div>
+                <div class="figure"><img src="age_stratified_daily_deaths.png"><p class="description">Deaths by Age</p></div>
+                <div class="figure"><img src="age_specific_severity_metrics_bar_CI.png"><p class="description">Severity Rates (IFR/IHR)</p></div>
             </div>
             
             <h2>3. Epidemiological Drivers</h2>
             <div class="figure-container">
-                <div class="figure"><img src="PostCalibrationFigures/Rt_trajectory_with_uncertainty.png"><p class="description">Effective Reproduction Number</p></div>
-                <div class="figure"><img src="PostCalibrationFigures/seroprevalence_trajectory.png"><p class="description">Seroprevalence</p></div>
+                <div class="figure"><img src="Rt_trajectory_with_uncertainty.png"><p class="description">Effective Reproduction Number</p></div>
+                <div class="figure"><img src="seroprevalence_trajectory.png"><p class="description">Seroprevalence</p></div>
             </div>
 
             <h2>4. Parameter Estimation</h2>
-            <div class="figure"><img src="PostCalibrationFigures/parameter_posteriors_kde.png"><p class="description">Parameter Posteriors</p></div>
+            <div class="figure"><img src="parameter_posteriors_kde.png"><p class="description">Parameter Posteriors</p></div>
 
             <h2>5. Scenario Analysis</h2>
             <div class="figure-container">
-                <div class="figure"><img src="PostCalibrationFigures/scenario_impact_bars.png"><p class="description">Relative Impact</p></div>
-                <div class="figure"><img src="PostCalibrationFigures/scenario_comparison.png"><p class="description">Absolute Comparison</p></div>
+                <div class="figure"><img src="scenario_impact_bars.png"><p class="description">Relative Impact</p></div>
+                <div class="figure"><img src="scenario_comparison.png"><p class="description">Absolute Comparison</p></div>
             </div>
         </body>
         </html>

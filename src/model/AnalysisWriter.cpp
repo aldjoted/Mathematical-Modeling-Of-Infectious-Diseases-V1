@@ -11,16 +11,13 @@
 namespace epidemic {
 
 AnalysisWriter::AnalysisWriter() {
-    // FIX Bug 5: Add exception handling to ensure thread safety
-    // Use try-catch to handle exceptions during thread creation
     try {
-        // Start worker thread
         worker_thread_ = std::thread(&AnalysisWriter::workerLoop, this);
         Logger::getInstance().info("AnalysisWriter", "Async writer initialized with worker thread");
     } catch (const std::exception& e) {
         Logger::getInstance().error("AnalysisWriter", 
             std::string("Failed to start worker thread: ") + e.what());
-        throw; // Re-throw to notify caller
+        throw;
     }
 }
 
@@ -73,7 +70,6 @@ void AnalysisWriter::workerLoop() {
                     std::string("Error in async task: ") + e.what());
             }
             
-            // FIX Bug 10: Notify waiters that a task completed (queue may now be empty)
             queue_cv_.notify_all();
         }
     }
@@ -88,11 +84,7 @@ void AnalysisWriter::enqueueTask(std::function<void()> task) {
 }
 
 void AnalysisWriter::waitForCompletion() {
-    // FIX Bug 10: Use condition variable instead of busy-wait loop
     std::unique_lock<std::mutex> lock(queue_mutex_);
-    
-    // Wait until queue is empty
-    // The condition variable is notified whenever a task completes
     queue_cv_.wait(lock, [this] {
         return task_queue_.empty();
     });
@@ -292,14 +284,13 @@ void AnalysisWriter::writePosteriorPredictiveData(
     const std::string& output_dir,
     const PosteriorPredictiveData& ppd_data) {
     
-    // FIX Bug 6: Get actual age class count from the data instead of hardcoded constant
+    // Determine age class count from actual data dimensions
     int num_age_classes = 0;
     if (ppd_data.daily_hospitalizations.median.cols() > 0) {
         num_age_classes = ppd_data.daily_hospitalizations.median.cols();
     } else if (ppd_data.daily_deaths.median.cols() > 0) {
         num_age_classes = ppd_data.daily_deaths.median.cols();
     } else {
-        // Fallback to default only if no data available
         num_age_classes = epidemic::constants::DEFAULT_NUM_AGE_CLASSES;
         Logger::getInstance().warning("AnalysisWriter", 
             "Could not determine age classes from PPC data, using default: " + 

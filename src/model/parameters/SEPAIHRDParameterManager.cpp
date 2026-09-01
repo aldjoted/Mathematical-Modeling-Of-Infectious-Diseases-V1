@@ -3,6 +3,7 @@
 #include "exceptions/Exceptions.hpp"
 #include <stdexcept>
 #include <iostream>
+#include <cmath>
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -94,9 +95,9 @@ Eigen::VectorXd SEPAIHRDParameterManager::getCurrentParameters() const {
     for (size_t i = 0; i < param_names_.size(); ++i) {
         const std::string& name = param_names_[i];
         if (name == "beta") current_params_vec[i] = model_params_struct.beta;
-        else if (name.rfind("beta_", 0) == 0) { // Handle beta_1, beta_2, etc.
+        else if (name.rfind("beta_", 0) == 0) {
              try {
-                size_t beta_idx = std::stoul(name.substr(5)) - 1; // "beta_1" -> index 0
+                size_t beta_idx = std::stoul(name.substr(5)) - 1;
                 if (beta_idx < model_params_struct.beta_values.size()) {
                     current_params_vec[i] = model_params_struct.beta_values[beta_idx];
                 } else {
@@ -171,7 +172,6 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
 
     Eigen::VectorXd constrained_params = applyConstraints(parameters_from_optimizer);
     
-    // Get a mutable copy of the model's current parameters
     SEPAIHRDParameters updated_params = target_model->getModelParameters();
     
     auto npi_strat_base = target_model->getNpiStrategy();
@@ -186,10 +186,8 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
     if (piecewise_npi_strat) {
         collected_calibratable_npi_values = piecewise_npi_strat->getCalibratableValues();
         
-        // Validate size consistency
         const size_t expected_count = piecewise_npi_strat->getNumCalibratableNpiParams();
         if (collected_calibratable_npi_values.size() != expected_count) {
-            // Log a warning but continue - this indicates a potential configuration issue
             std::cerr << "[Warning] SEPAIHRDParameterManager: NPI calibratable values size ("
                       << collected_calibratable_npi_values.size() << ") does not match expected count ("
                       << expected_count << "). This may indicate a configuration issue." << std::endl;
@@ -203,7 +201,7 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         if (name == "beta") { updated_params.beta = value; }
         else if (name.rfind("beta_", 0) == 0) {
             try {
-                size_t beta_idx = std::stoul(name.substr(5)) - 1; // "beta_1" -> index 0
+                size_t beta_idx = std::stoul(name.substr(5)) - 1;
                 if (beta_idx < updated_params.beta_values.size()) {
                     updated_params.beta_values[beta_idx] = value;
                 } else {
@@ -254,7 +252,7 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
                         collected_calibratable_npi_values[npi_cal_idx] = value;
                         npi_values_need_update = true;
                         found = true;
-                        break; 
+                        break;
                     }
                 }
                 if (!found) {
@@ -268,21 +266,14 @@ void SEPAIHRDParameterManager::updateModelParameters(const Eigen::VectorXd& para
         }
     }
 
-    // Set the full parameter struct back to the model.
-    // The model's setModelParameters method is responsible for updating all internal state,
-    // including re-initializing the beta_strategy_.
     target_model->setModelParameters(updated_params);
 
-    // If any NPI parameters were changed, update the NPI strategy object.
-    // This is a direct modification of the strategy object held by the model.
     if (npi_values_need_update && piecewise_npi_strat) {
         const size_t expected_count = piecewise_npi_strat->getNumCalibratableNpiParams();
         
         if (collected_calibratable_npi_values.size() == expected_count) {
             piecewise_npi_strat->setCalibratableValues(collected_calibratable_npi_values);
         } else {
-            // This should not happen if configuration is correct.
-            // Log error and throw exception rather than silently masking the issue.
             std::cerr << "[Error] SEPAIHRDParameterManager: Cannot update NPI values. "
                       << "Collected size (" << collected_calibratable_npi_values.size() 
                       << ") does not match expected count (" << expected_count << ")." << std::endl;
@@ -307,28 +298,51 @@ double SEPAIHRDParameterManager::getSigmaForParamIndex(int index) const {
     return it->second;
 }
 
+
+static double reflectBound(double value, double minb, double maxb) {
+    if (minb >= maxb) return minb;
+
+    double width = maxb - minb;
+    double x = value;
+
+    double y = std::fmod(x - minb, 2.0 * width);
+    if (y < 0) y += 2.0 * width;
+
+    if (y <= width) return minb + y;
+    else return maxb - (y - width);
+}
+
 Eigen::VectorXd SEPAIHRDParameterManager::applyConstraints(const Eigen::VectorXd& parameters) const {
     if (static_cast<size_t>(parameters.size()) != param_names_.size()) {
         THROW_INVALID_PARAM("SEPAIHRDParameterManager::applyConstraints", "Parameter vector size mismatch.");
     }
+
     Eigen::VectorXd constrained_params = parameters;
+
     for (size_t i = 0; i < param_names_.size(); ++i) {
         const std::string& name = param_names_[i];
         auto it = param_bounds_.find(name);
+
         if (it != param_bounds_.end()) {
-            double min_bound = it->second.first;
-            double max_bound = it->second.second;
-            if (min_bound > max_bound) {
-                 std::cerr << "[Warning] SEPAIHRDParameterManager: Min bound > Max bound for parameter " << name
-                           << " (" << min_bound << " > " << max_bound << "). Using min bound only for max, and max for min if value is outside." << std::endl;
-                if (constrained_params[i] < min_bound) constrained_params[i] = min_bound;
+            double minb = it->second.first;
+            double maxb = it->second.second;
+
+            if (minb > maxb) std::swap(minb, maxb);
+            if (mode_ == ConstraintMode::OPTIMIZATION_CLAMP) {
+                constrained_params[i] = std::min(std::max(parameters[i], minb), maxb);
+            } else {
+                constrained_params[i] = reflectBound(parameters[i], minb, maxb);
             }
-            constrained_params[i] = std::max(min_bound, std::min(max_bound, parameters[i]));
-        } else {
-             std::cerr << "[Warning] SEPAIHRDParameterManager: Bounds not found for parameter during constraint application: " << name << ". Applying default non-negativity." << std::endl;
-             constrained_params[i] = std::max(0.0, parameters[i]);
+        }
+        else {
+            if (mode_ == ConstraintMode::OPTIMIZATION_CLAMP) {
+                constrained_params[i] = std::max(0.0, parameters[i]);
+            } else {
+                constrained_params[i] = std::abs(parameters[i]);
+            }
         }
     }
+
     return constrained_params;
 }
 
@@ -337,7 +351,7 @@ int SEPAIHRDParameterManager::getIndexForParam(const std::string& name) const {
      if (it != param_names_.end()) {
          return std::distance(param_names_.begin(), it);
      }
-     return -1; 
+     return -1;
 }
 
 double SEPAIHRDParameterManager::getLowerBoundForParamIndex(int idx) const {

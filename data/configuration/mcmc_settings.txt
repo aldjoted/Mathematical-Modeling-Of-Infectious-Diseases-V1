@@ -1,46 +1,71 @@
 # --- START OF FILE mcmc_settings.txt ---
-# Configuration for Metropolis-Hastings Sampler with Simulated Annealing
+# Configuration for Bayesian Valid Adaptive Metropolis (AM) Sampler
 #
-# This sampler uses:
-# 1. Random Step All: Correlated perturbation of all parameters (Adaptive Metropolis)
-# 2. Random Step One: Axis-aligned perturbation of a single parameter
-# 3. Simulated Annealing: Accepts worse solutions with probability exp(deltaL / T)
-# 4. Adaptive Covariance: Learns parameter correlations during sampling
+# This sampler implements the Haario et al. (2001) Adaptive Metropolis algorithm:
+# - Learns the posterior covariance on-the-fly for efficient high-dimensional sampling
+# - Uses optimal scaling factor (2.38^2 / d) from Roberts & Rosenthal (2001)
+# - Operates in Log-Space to prevent numerical underflow
+# - Ensures Ergodicity via diminishing adaptation
+# - Supports warm-start from Phase 1 covariance
 
 # --- Core MCMC Settings ---
 
 # mcmc_iterations: Total number of MCMC iterations.
-# Default: 5000
-mcmc_iterations 10000
+# Recommended: 10000-50000 for posterior exploration
+# Default: 10000
+mcmc_iterations 100000
+
+# burn_in: Number of iterations before adaptive covariance learning begins.
+# During burn-in, the sampler uses initial (diagonal) proposal covariance.
+# After burn-in, the sampler adapts based on chain history.
+# Recommended: 10-20% of total iterations
+# Default: 1000
+burn_in 5000
+
+# adaptation_period: How often to perform full covariance recomputation.
+# Rank-1 updates happen every iteration after burn-in; full recomputation
+# is done every N iterations to correct numerical drift.
+# Default: 100
+adaptation_period 100
 
 # thinning: Save 1 sample for every N iterations to reduce autocorrelation.
+# Note: For inference, it's better to keep all samples and thin post-hoc.
 # Default: 1 (save all)
-thinning 50
+thinning 100
 
 # report_interval: Frequency (in iterations) for logging progress and checkpointing.
 # Default: 100
-report_interval 100
+report_interval 10000
 
-# --- Simulated Annealing Parameters ---
+# regularization_epsilon: Small value added to covariance diagonal for stability.
+# Prevents singular covariance matrices when parameters are highly correlated.
+# Default: 1e-6
+regularization_epsilon 1e-6
 
-# sa_initial_temp: Starting temperature for annealing.
-# Higher values allow more exploration of worse solutions initially.
-# Default: 100.0
-sa_initial_temp 100
+# --- Adaptive Scaling (NEW) ---
 
-# sa_cooling_rate: Geometric cooling factor applied each iteration (T *= cooling_rate).
-# Values close to 1.0 = slow cooling, values close to 0.9 = fast cooling.
-# Default: 0.999
-sa_cooling_rate 0.9999
+# target_acceptance_rate: Target acceptance rate for scale adaptation.
+# The algorithm will automatically adjust the proposal scale to achieve this rate.
+# Theoretical optimum for Gaussian targets is ~0.234 (Roberts & Rosenthal 2001).
+# Default: 0.234
+target_acceptance_rate 0.234
 
-# step_all_prob: Probability of using 'Step All' (global correlated move) vs 'Step One' (local move).
-# Higher values favor global exploration, lower values favor local refinement.
-# Default: 0.4 (40% global, 60% local)
-step_all_prob 0.4
+# adapt_scale: Enable/disable automatic global scale adaptation.
+# When enabled (1), the algorithm uses Robbins-Monro updates to adjust scale.
+# This helps achieve optimal acceptance rate without manual tuning.
+# Default: 1 (enabled)
+adapt_scale 1
 
-# --- Parallel Candidate Cloud ---
+# --- I/O Controls ---
 
-# cloud_size_multiplier: Cloud size = num_threads * multiplier.
-# Higher values generate more candidates per iteration for aggressive exploration.
-# Default: 2
-cloud_size_multiplier 2
+# store_samples: Whether to store samples in memory (1=yes, 0=no).
+# Default: 1
+store_samples 1
+
+# write_checkpoints: Whether to write checkpoint files during sampling.
+# Default: 1
+write_checkpoints 1
+
+# write_trace: Whether to write full posterior trace at the end.
+# Default: 1
+write_trace 1

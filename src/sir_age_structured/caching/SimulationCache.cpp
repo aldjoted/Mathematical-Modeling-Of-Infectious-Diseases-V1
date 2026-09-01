@@ -163,11 +163,13 @@ size_t SimulationCache::size() const {
 }
 
 bool SimulationCache::getLikelihood(const std::string& keyStr, double& value) {
+    likelihood_get_calls_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
     try {
         size_t key = std::stoull(keyStr);
         size_t idx = findIndex(key);
         if (idx != static_cast<size_t>(-1)) {
+            likelihood_get_hits_.fetch_add(1, std::memory_order_relaxed);
             frequencies_[idx]++;
             timestamps_[idx] = ++current_tick_;
             value = values_[idx];
@@ -178,6 +180,7 @@ bool SimulationCache::getLikelihood(const std::string& keyStr, double& value) {
 }
 
 void SimulationCache::storeLikelihood(const std::string& keyStr, double value) {
+    likelihood_store_calls_.fetch_add(1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(mutex_);
     try {
         size_t key = std::stoull(keyStr);
@@ -204,6 +207,48 @@ void SimulationCache::storeLikelihood(const std::string& keyStr, double value) {
             count_++;
         }
     } catch (...) {}
+}
+
+bool SimulationCache::getLikelihood(size_t key, double& value) {
+    likelihood_get_calls_.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t idx = findIndex(key);
+    if (idx != static_cast<size_t>(-1)) {
+        likelihood_get_hits_.fetch_add(1, std::memory_order_relaxed);
+        frequencies_[idx]++;
+        timestamps_[idx] = ++current_tick_;
+        value = values_[idx];
+        return true;
+    }
+    return false;
+}
+
+void SimulationCache::storeLikelihood(size_t key, double value) {
+    likelihood_store_calls_.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t idx = findIndex(key);
+
+    if (idx != static_cast<size_t>(-1)) {
+        values_[idx] = value;
+        frequencies_[idx]++;
+        timestamps_[idx] = ++current_tick_;
+        return;
+    }
+
+    if (count_ >= capacity_) evict();
+
+    size_t insert_idx = key % capacity_;
+    while (occupied_[insert_idx]) {
+        insert_idx++;
+        if (insert_idx == capacity_) insert_idx = 0;
+    }
+
+    keys_[insert_idx] = key;
+    values_[insert_idx] = value;
+    frequencies_[insert_idx] = 1;
+    timestamps_[insert_idx] = ++current_tick_;
+    occupied_[insert_idx] = true;
+    count_++;
 }
 
 } // namespace epidemic

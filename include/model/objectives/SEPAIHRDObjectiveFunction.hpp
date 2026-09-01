@@ -15,6 +15,8 @@
 #include <future>
 #include <mutex>
 
+namespace epidemic { class SEPAIHRDParameterManager; }
+
 namespace epidemic {
 
     /**
@@ -103,6 +105,13 @@ namespace epidemic {
         double rel_err_;
 
     private:
+        // Cached cast to avoid dynamic_cast in the hot loop.
+        SEPAIHRDParameterManager* sepaihrd_manager_ = nullptr;
+
+        // Precomputed indices for run-up handling.
+        int runup_offset_ = 0;
+        int num_obs_points_ = 0;
+
         // Internal simulator instance
         /** @brief Unique pointer to the internal ODE simulator instance. */
         mutable std::unique_ptr<AgeSEPAIHRDSimulator> simulator_;

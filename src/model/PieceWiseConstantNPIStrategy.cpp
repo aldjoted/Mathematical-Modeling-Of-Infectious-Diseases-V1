@@ -92,19 +92,38 @@ double PiecewiseConstantNpiStrategy::getReductionFactor(double time) const {
         return baseline_kappa_value_;
     }
 
-    double previous_npi_end_time = baseline_period_end_time_;
-    for (size_t i = 0; i < npi_period_end_times_.size(); ++i) {
-        if (time > previous_npi_end_time && time <= npi_period_end_times_[i]) {
-            return npi_kappa_values_[i];
-        }
-        previous_npi_end_time = npi_period_end_times_[i];
-    }
-
-    if (!npi_kappa_values_.empty()) {
-        return npi_kappa_values_.back();
-    } else {
+    if (npi_period_end_times_.empty()) {
         return baseline_kappa_value_;
     }
+
+    // Fast path: assume ODE solver calls are mostly non-decreasing in time.
+    // If time goes backwards (e.g., rejected step / dense output), fall back to binary search.
+    if (time < cached_time_) {
+        auto it = std::lower_bound(npi_period_end_times_.begin(), npi_period_end_times_.end(), time);
+        if (it == npi_period_end_times_.end()) {
+            cached_period_index_ = npi_period_end_times_.size();
+            cached_time_ = time;
+            return npi_kappa_values_.back();
+        }
+        cached_period_index_ = static_cast<size_t>(std::distance(npi_period_end_times_.begin(), it));
+        cached_time_ = time;
+        return npi_kappa_values_[cached_period_index_];
+    }
+
+    size_t idx = cached_period_index_;
+    if (idx > npi_period_end_times_.size()) {
+        idx = 0;
+    }
+    while (idx < npi_period_end_times_.size() && time > npi_period_end_times_[idx]) {
+        ++idx;
+    }
+    cached_period_index_ = idx;
+    cached_time_ = time;
+
+    if (idx >= npi_kappa_values_.size()) {
+        return npi_kappa_values_.back();
+    }
+    return npi_kappa_values_[idx];
 }
 
 const std::vector<double>& PiecewiseConstantNpiStrategy::getEndTimes() const {

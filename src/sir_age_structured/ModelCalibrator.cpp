@@ -1,5 +1,6 @@
 #include "sir_age_structured/ModelCalibrator.hpp"
 #include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
+#include "model/parameters/SEPAIHRDParameterManager.hpp"
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -11,7 +12,7 @@ namespace epidemic {
         std::unique_ptr<IParameterManager> parameterManager,
         std::unique_ptr<IObjectiveFunction> objectiveFunction,
         std::map<std::string, std::unique_ptr<IOptimizationAlgorithm>> optimization_algorithms,
-        const epidemic::CalibrationData& calibration_data,  // Use epidemic:: prefix
+        const epidemic::CalibrationData& calibration_data,
         const std::vector<double>& time_points)
         : parameterManager_(std::move(parameterManager)),
           objectiveFunction_(std::move(objectiveFunction)),
@@ -56,6 +57,14 @@ namespace epidemic {
         auto it_phase1 = optimization_algorithms_.find(PHASE1_NAME);
         if (it_phase1 != optimization_algorithms_.end()) {
             std::cout << "\n--- Running Phase 1: " << PHASE1_NAME << " ---" << std::endl;
+            
+            // CLAMPING for optimization: allows optimizer to stick to boundaries
+            auto* sepaihrd_pm = dynamic_cast<epidemic::SEPAIHRDParameterManager*>(parameterManager_.get());
+            if (sepaihrd_pm) {
+                sepaihrd_pm->setConstraintMode(epidemic::ConstraintMode::OPTIMIZATION_CLAMP);
+                std::cout << "Constraint mode: OPTIMIZATION_CLAMP (Phase 1)" << std::endl;
+            }
+            
             IOptimizationAlgorithm* phase1_algo = it_phase1->second.get();
             phase1_algo->configure(phase1_settings);
             phase1_result_ = phase1_algo->optimize(current_best_params, *objectiveFunction_, *parameterManager_);
@@ -74,17 +83,53 @@ namespace epidemic {
         auto it_phase2 = optimization_algorithms_.find(PHASE2_NAME);
         if (it_phase2 != optimization_algorithms_.end()) {
             std::cout << "\n--- Running Phase 2: " << PHASE2_NAME << " ---" << std::endl;
+            
+            // REFLECTION for MCMC: preserves detailed balance and prevents boundary bias
+            auto* sepaihrd_pm = dynamic_cast<epidemic::SEPAIHRDParameterManager*>(parameterManager_.get());
+            if (sepaihrd_pm) {
+                sepaihrd_pm->setConstraintMode(epidemic::ConstraintMode::MCMC_REFLECT);
+                std::cout << "Constraint mode: MCMC_REFLECT (Phase 2)" << std::endl;
+            }
+            
             IOptimizationAlgorithm* phase2_algo = it_phase2->second.get();
             phase2_algo->configure(phase2_settings);
             
-            // Transfer learned covariance from Phase 1 to Phase 2 (if available)
-            // This allows MCMC to immediately use the correlation structure learned during optimization
+            // Transfer learned covariance from Phase 1 to Phase 2 with robust conditioning
             if (phase1_result_.finalCovariance.size() > 0) {
-                // Try to cast to MetropolisHastingsSampler to set initial covariance
                 auto* mcmc_sampler = dynamic_cast<MetropolisHastingsSampler*>(phase2_algo);
                 if (mcmc_sampler) {
-                    std::cout << "Transferring learned covariance from Phase 1 to Phase 2 for warm start." << std::endl;
-                    mcmc_sampler->setInitialCovariance(phase1_result_.finalCovariance);
+                    std::cout << "Conditioning Phase 1 covariance for MCMC Phase 2..." << std::endl;
+                    
+                    Eigen::MatrixXd cov = phase1_result_.finalCovariance;
+                    int n_params = cov.rows();
+                    
+                    // Symmetrize for numerical stability
+                    cov = 0.5 * (cov + cov.transpose());
+                    
+                    // Eigendecomposition with eigenvalue flooring to prevent singularity
+                    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(cov);
+                    Eigen::VectorXd evals = solver.eigenvalues();
+                    Eigen::MatrixXd evecs = solver.eigenvectors();
+                    
+                    for (int i = 0; i < n_params; ++i) {
+                        double prior_sigma = parameterManager_->getSigmaForParamIndex(i);
+                        double min_var = std::pow(prior_sigma * 0.1, 2);
+                        evals(i) = std::max(evals(i), min_var);
+                    }
+                    
+                    // Reconstruct: Σ' = Q Λ' Q^T
+                    Eigen::MatrixXd floored_cov = evecs * evals.asDiagonal() * evecs.transpose();
+                    
+                    // Global inflation (4x variance = 2x stdev) for exploration
+                    Eigen::MatrixXd phase2_cov = floored_cov * 4.0;
+                    
+                    // Ensure positive definiteness with small jitter
+                    double eps = 1e-8 * phase2_cov.trace() / n_params;
+                    phase2_cov += eps * Eigen::MatrixXd::Identity(n_params, n_params);
+                    
+                    std::cout << "Covariance conditioning complete." << std::endl;
+                    
+                    mcmc_sampler->setInitialCovariance(phase2_cov);
                 }
             }
             

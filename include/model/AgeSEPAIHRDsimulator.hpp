@@ -53,12 +53,12 @@ namespace epidemic {
         /**
          * @brief Convenience constant for the number of compartments in this specific model.
          */
-        static constexpr int NUM_COMPARTMENTS = constants::NUM_COMPARTMENTS_SEPAIHRD; // S, E, P, A, I, H, ICU, R, D
+        static constexpr int NUM_COMPARTMENTS = constants::NUM_COMPARTMENTS_SEPAIHRD; // S, E, P, A, I, H, ICU, R, D, CumH, CumICU
         /**
          * @brief Convenience constant for the offset of the D (Deaths) compartment in the state vector.
-         * (0=S, 1=E, 2=P, 3=A, 4=I, 5=H, 6=ICU, 7=R, 8=D)
+         * (0=S, 1=E, 2=P, 3=A, 4=I, 5=H, 6=ICU, 7=R, 8=D, 9=CumH, 10=CumICU)
          */
-        static constexpr int D_COMPARTMENT_OFFSET = constants::NUM_COMPARTMENTS_SEPAIHRD - 1; 
+        static constexpr int D_COMPARTMENT_OFFSET = 8;
     };
     
 } // namespace epidemic

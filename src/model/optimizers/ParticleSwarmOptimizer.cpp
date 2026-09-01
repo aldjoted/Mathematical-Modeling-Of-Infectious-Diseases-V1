@@ -225,7 +225,6 @@ OptimizationResult ParticleSwarmOptimization::optimize(
     result.bestObjectiveValue = gbest_value;
     
     // Estimate covariance from final swarm for Phase 2 transfer
-    // This provides correlation structure learned from particle distribution
     Eigen::VectorXd mean_position = Eigen::VectorXd::Zero(n);
     for (const auto& p : swarm) {
         mean_position += p.pbest_position;
@@ -237,9 +236,9 @@ OptimizationResult ParticleSwarmOptimization::optimize(
         Eigen::VectorXd diff = p.pbest_position - mean_position;
         result.finalCovariance += diff * diff.transpose();
     }
-    result.finalCovariance /= (swarm_size_ - 1);  // Unbiased estimator
+    result.finalCovariance /= (swarm_size_ - 1);
     
-    // Add small regularization for numerical stability
+    // Regularization for numerical stability
     result.finalCovariance += 1e-6 * Eigen::MatrixXd::Identity(n, n);
     
     logger.info(logger_source_id_, "Estimated covariance from swarm for Phase 2 transfer.");
@@ -282,15 +281,12 @@ void ParticleSwarmOptimization::initializeSwarm(
         std::mt19937 local_rng(seeds[i]);
         std::uniform_real_distribution<> local_uniform(0.0, 1.0);
         
-        // First particle uses initial parameters if provided
         if (i == 0 && initial_params != nullptr) {
             swarm[i].position = *initial_params;
-            // Ensure within bounds
             for (int k = 0; k < n; ++k) {
                 swarm[i].position[k] = std::clamp(swarm[i].position[k], lb[k], ub[k]);
             }
         } else {
-            // Random initialization
             for (int k = 0; k < n; ++k) {
                 swarm[i].position[k] = lb[k] + local_uniform(local_rng) * (ub[k] - lb[k]);
             }
@@ -302,18 +298,15 @@ void ParticleSwarmOptimization::initializeSwarm(
             swarm[i].velocity[k] = -vmax + 2 * vmax * local_uniform(local_rng);
         }
         
-        // Evaluate fitness
         swarm[i].current_fitness = objectiveFunction.calculate(swarm[i].position);
         swarm[i].pbest_position = swarm[i].position;
         swarm[i].pbest_value = swarm[i].current_fitness;
         swarm[i].quantum_position = swarm[i].position;
     }
     
-    // Apply opposition-based learning if enabled
     if (use_opposition_learning_) {
         oppositionBasedInitialization(swarm, lb, ub);
         
-        // Re-evaluate fitness for modified particles
         #pragma omp parallel for if(use_parallel_)
         for (int i = 0; i < swarm_size_; ++i) {
             swarm[i].current_fitness = objectiveFunction.calculate(swarm[i].position);
@@ -322,7 +315,6 @@ void ParticleSwarmOptimization::initializeSwarm(
         }
     }
     
-    // Find initial global best
     for (const auto& p : swarm) {
         if (p.pbest_value > gbest_value) {
             gbest_value = p.pbest_value;
@@ -358,7 +350,6 @@ void ParticleSwarmOptimization::updateParticles(
         EvolutionaryState state = estimateEvolutionaryState(swarm, gbest_position);
         adaptParameters(state, iteration, omega, c1, c2);
     } else {
-        // Linear variation
         double ratio = (iterations_ > 1) ? 
             static_cast<double>(iteration) / (iterations_ - 1) : 0.0;
         omega = omega_start_ + (omega_end_ - omega_start_) * ratio;
@@ -366,17 +357,14 @@ void ParticleSwarmOptimization::updateParticles(
         c2 = c2_initial_ + (c2_final_ - c2_initial_) * ratio;
     }
     
-    // Calculate mean best position for QPSO
     Eigen::VectorXd mean_best_position;
     if (variant_ == PSOVariant::QUANTUM) {
         mean_best_position = calculateMeanBestPosition(swarm);
     }
     
-    // Pre-generate seeds for thread safety
     std::vector<unsigned int> seeds(swarm_size_);
     for(int i=0; i<swarm_size_; ++i) seeds[i] = static_cast<unsigned int>(rng_());
 
-    // Update particles based on variant
     #pragma omp parallel for if(use_parallel_)
     for (int i = 0; i < swarm_size_; ++i) {
         std::mt19937 local_rng(seeds[i]);
@@ -407,7 +395,7 @@ void ParticleSwarmOptimization::updateParticles(
                 break;
                 
             case PSOVariant::HYBRID:
-                // Combine strategies based on success rate
+                // Choose update method based on particle success rate
                 if (swarm[i].success_rate < 0.3 && local_uniform(local_rng) < 0.5) {
                     levyFlightUpdate(swarm[i], gbest_position, omega, c1, c2, lb, ub, local_rng);
                 } else if (swarm[i].success_rate > 0.7 && local_uniform(local_rng) < 0.3) {
@@ -443,7 +431,6 @@ ParticleSwarmOptimization::estimateEvolutionaryState(
     
     double evolutionary_factor = calculateEvolutionaryFactor(swarm, gbest_position);
     
-    // Fuzzy classification based on APSO paper
     if (evolutionary_factor > 0.7) {
         return EvolutionaryState::EXPLORATION;
     } else if (evolutionary_factor > 0.4) {
@@ -485,11 +472,9 @@ double ParticleSwarmOptimization::calculateEvolutionaryFactor(
     double fitness_range = (max_fitness - min_fitness) > 1e-10 ? 
         (max_fitness - min_fitness) : 1e-10;
     
-    // Combine distance and fitness factors
     double distance_factor = (max_distance > 0) ? mean_distance / max_distance : 0.0;
     double fitness_factor = (max_fitness - mean_fitness) / fitness_range;
     
-    // Weighted combination
     return 0.5 * distance_factor + 0.5 * (1.0 - fitness_factor);
 }
 
@@ -548,13 +533,11 @@ void ParticleSwarmOptimization::oppositionBasedInitialization(
     int n = swarm[0].position.size();
     std::vector<particle> opposite_swarm(swarm_size_);
     
-    // Generate opposite particles
     for (int i = 0; i < swarm_size_; ++i) {
         opposite_swarm[i].position.resize(n);
         opposite_swarm[i].velocity.resize(n);
         opposite_swarm[i].quantum_position.resize(n);
         
-        // Calculate opposite position
         for (int k = 0; k < n; ++k) {
             opposite_swarm[i].position[k] = lb[k] + ub[k] - swarm[i].position[k];
             opposite_swarm[i].velocity[k] = -swarm[i].velocity[k];
@@ -564,7 +547,7 @@ void ParticleSwarmOptimization::oppositionBasedInitialization(
         opposite_swarm[i].pbest_position = opposite_swarm[i].position;
     }
     
-    // Evaluate fitness for all particles (original and opposite)
+    // Select best from original and opposite particles
     std::vector<std::pair<double, int>> fitness_indices;
     fitness_indices.reserve(2 * swarm_size_);
     
@@ -573,11 +556,9 @@ void ParticleSwarmOptimization::oppositionBasedInitialization(
         fitness_indices.push_back({opposite_swarm[i].pbest_value, i + swarm_size_});
     }
     
-    // Sort by fitness (descending for maximization)
     std::sort(fitness_indices.begin(), fitness_indices.end(),
         [](const auto& a, const auto& b) { return a.first > b.first; });
     
-    // Select top swarm_size_ particles
     std::vector<particle> new_swarm(swarm_size_);
     for (int i = 0; i < swarm_size_; ++i) {
         int idx = fitness_indices[i].second;
@@ -603,14 +584,12 @@ void ParticleSwarmOptimization::standardPSOUpdate(
     int n = p.position.size();
     std::uniform_real_distribution<> local_uniform(0.0, 1.0);
     
-    // Generate random vectors
     Eigen::VectorXd r1(n), r2(n);
     for (int i = 0; i < n; ++i) {
         r1[i] = local_uniform(rng);
         r2[i] = local_uniform(rng);
     }
     
-    // Velocity update with constriction factor option
     Eigen::VectorXd cognitive_term = c1 * r1.cwiseProduct(
         p.pbest_position - p.position);
     Eigen::VectorXd social_term = c2 * r2.cwiseProduct(
@@ -618,20 +597,18 @@ void ParticleSwarmOptimization::standardPSOUpdate(
     
     p.velocity = omega * p.velocity + cognitive_term + social_term;
     
-    // Velocity clamping
     for (int k = 0; k < n; ++k) {
         double vmax = 0.2 * (ub[k] - lb[k]);
         p.velocity[k] = std::clamp(p.velocity[k], -vmax, vmax);
     }
     
-    // Position update
     p.position += p.velocity;
     
-    // Boundary handling with reflection
+    // Boundary handling with reflection and velocity dampening
     for (int k = 0; k < n; ++k) {
         if (p.position[k] < lb[k]) {
             p.position[k] = lb[k] + std::abs(p.position[k] - lb[k]);
-            p.velocity[k] *= -0.5;  // Dampen velocity on boundary hit
+            p.velocity[k] *= -0.5;
         } else if (p.position[k] > ub[k]) {
             p.position[k] = ub[k] - std::abs(p.position[k] - ub[k]);
             p.velocity[k] *= -0.5;
@@ -652,33 +629,26 @@ void ParticleSwarmOptimization::quantumPSOUpdate(
     int n = p.position.size();
     std::uniform_real_distribution<> local_uniform(0.0, 1.0);
     
-    // Calculate attractor point (weighted average of pbest and gbest)
+    // Weighted average of pbest and gbest
     double phi = local_uniform(rng);
     Eigen::VectorXd attractor = phi * p.pbest_position + 
                                (1 - phi) * gbest_position;
     
-    // Calculate contraction-expansion coefficient
     double beta = quantum_beta_ * (1.0 - 0.5 * static_cast<double>(iteration) / iterations_);
     
-    // Update position using quantum behavior
     for (int k = 0; k < n; ++k) {
         double u = local_uniform(rng);
-        
-        // Characteristic length
         double L = 2.0 * beta * std::abs(mean_best_position[k] - p.position[k]);
         
-        // Quantum position update
         if (local_uniform(rng) < 0.5) {
             p.position[k] = attractor[k] + L * std::log(1.0 / u);
         } else {
             p.position[k] = attractor[k] - L * std::log(1.0 / u);
         }
         
-        // Boundary handling
         p.position[k] = std::clamp(p.position[k], lb[k], ub[k]);
     }
     
-    // Update quantum position for mean calculation
     p.quantum_position = p.position;
 }
 
@@ -690,21 +660,17 @@ void ParticleSwarmOptimization::levyFlightUpdate(
     const std::vector<double>& ub,
     std::mt19937& rng) {
     
-    // First perform standard PSO update
     standardPSOUpdate(p, gbest_position, omega, c1, c2, lb, ub, rng);
     
     std::uniform_real_distribution<> local_uniform(0.0, 1.0);
 
-    // Apply Lévy flight with adaptive probability
     double levy_prob = 0.1 * (1.0 + p.success_rate);
     if (local_uniform(rng) < levy_prob) {
         int n = p.position.size();
         Eigen::VectorXd levy_step = generateLevyVector(n, rng);
         
-        // Adaptive step size based on search progress
         double step_scale = 0.01 * (1.0 - stagnation_counter_ / static_cast<double>(max_stagnation_));
         
-        // Apply Lévy flight
         for (int k = 0; k < n; ++k) {
             double scale = step_scale * (ub[k] - lb[k]);
             p.position[k] += scale * levy_step[k];
@@ -718,14 +684,12 @@ double ParticleSwarmOptimization::calculateSwarmDiversity(
     
     int n = swarm[0].position.size();
     
-    // Calculate swarm centroid
     Eigen::VectorXd swarm_centroid = Eigen::VectorXd::Zero(n);
     for (const auto& p : swarm) {
         swarm_centroid += p.position;
     }
     swarm_centroid /= swarm_size_;
     
-    // Calculate diversity as average distance from centroid
     double avg_distance = 0.0;
     double max_distance = 0.0;
     
@@ -736,7 +700,6 @@ double ParticleSwarmOptimization::calculateSwarmDiversity(
     }
     avg_distance /= swarm_size_;
     
-    // Normalize by maximum possible distance
     return (max_distance > 0) ? avg_distance / max_distance : 0.0;
 }
 
@@ -749,12 +712,9 @@ void ParticleSwarmOptimization::applyElitistLearningStrategy(
     int n = best_particle.position.size();
     Eigen::VectorXd trial_position = best_particle.position;
     
-    // Adaptive perturbation size
     double sigma_scale = 0.1 * std::exp(-2.0 * best_particle.success_rate);
     
-    // Try multiple perturbations
     for (int attempt = 0; attempt < 3; ++attempt) {
-        // Generate Gaussian perturbation
         for (int k = 0; k < n; ++k) {
             double sigma = sigma_scale * (ub[k] - lb[k]);
             trial_position[k] = best_particle.position[k] + sigma * normal_dist_(rng_);
@@ -775,7 +735,6 @@ void ParticleSwarmOptimization::applyElitistLearningStrategy(
             break;
         }
         
-        // Reduce perturbation size for next attempt
         sigma_scale *= 0.5;
     }
 }
@@ -790,18 +749,15 @@ void ParticleSwarmOptimization::restartSwarm(
     
     Logger& logger = Logger::getInstance();
     
-    // Sort particles by fitness
     std::sort(swarm.begin(), swarm.end(),
         [](const particle& a, const particle& b) {
             return a.pbest_value > b.pbest_value;
         });
     
-    // Keep best particles
     std::vector<particle> elite_particles(
         swarm.begin(), 
         swarm.begin() + std::min(keep_best_count, swarm_size_));
     
-    // Get parameter bounds
     int n = parameterManager.getParameterCount();
     std::vector<double> lb(n), ub(n);
     for (int k = 0; k < n; ++k) {
@@ -809,42 +765,33 @@ void ParticleSwarmOptimization::restartSwarm(
         ub[k] = parameterManager.getUpperBoundForParamIndex(k);
     }
     
-    // Pre-generate seeds for thread safety
     std::vector<unsigned int> seeds(swarm_size_);
     for(int i=0; i<swarm_size_; ++i) seeds[i] = static_cast<unsigned int>(rng_());
 
-    // Reinitialize remaining particles
     #pragma omp parallel for if(use_parallel_)
     for (int i = keep_best_count; i < swarm_size_; ++i) {
-        // Thread-local RNG
         std::mt19937 local_rng(seeds[i]);
         std::uniform_real_distribution<> local_uniform(0.0, 1.0);
         std::normal_distribution<> local_normal(0.0, 1.0);
         
-        // Initialize around elite particles with exploration
         int elite_idx = i % elite_particles.size();
         
         for (int k = 0; k < n; ++k) {
-            // Mix of exploitation around elite and exploration
             if (local_uniform(local_rng) < 0.7) {
-                // Initialize around elite particle
                 double range = ub[k] - lb[k];
                 double sigma = 0.3 * range * (1.0 + 0.5 * local_uniform(local_rng));
                 swarm[i].position[k] = elite_particles[elite_idx].position[k] + 
                                       sigma * local_normal(local_rng);
             } else {
-                // Random exploration
                 swarm[i].position[k] = lb[k] + local_uniform(local_rng) * (ub[k] - lb[k]);
             }
             
             swarm[i].position[k] = std::clamp(swarm[i].position[k], lb[k], ub[k]);
             
-            // Reset velocity
             double vmax = 0.2 * (ub[k] - lb[k]);
             swarm[i].velocity[k] = -vmax + 2 * vmax * local_uniform(local_rng);
         }
         
-        // Reset particle state
         swarm[i].current_fitness = objectiveFunction.calculate(swarm[i].position);
         swarm[i].pbest_position = swarm[i].position;
         swarm[i].pbest_value = swarm[i].current_fitness;
@@ -854,12 +801,10 @@ void ParticleSwarmOptimization::restartSwarm(
         swarm[i].success_rate = 0.0;
     }
     
-    // Restore elite particles
     for (int i = 0; i < std::min(keep_best_count, swarm_size_); ++i) {
         swarm[i] = elite_particles[i];
     }
     
-    // Ensure global best is maintained
     gbest_value = swarm[0].pbest_value;
     gbest_position = swarm[0].pbest_position;
     
@@ -901,9 +846,8 @@ std::vector<int> ParticleSwarmOptimization::getNeighbors(int particle_idx) {
             break;
             
         case TopologyType::LOCAL_BEST:
-            // Ring topology - k neighbors on each side
             {
-                int k = 2;  // Number of neighbors on each side
+                int k = 2;
                 neighbors.push_back(particle_idx);
                 for (int j = 1; j <= k; ++j) {
                     neighbors.push_back((particle_idx - j + swarm_size_) % swarm_size_);
@@ -913,16 +857,13 @@ std::vector<int> ParticleSwarmOptimization::getNeighbors(int particle_idx) {
             break;
             
         case TopologyType::VON_NEUMANN:
-            // Grid topology (assuming square grid)
             {
                 int grid_size = static_cast<int>(std::ceil(std::sqrt(swarm_size_)));
                 int row = particle_idx / grid_size;
                 int col = particle_idx % grid_size;
                 
-                // Add self
                 neighbors.push_back(particle_idx);
                 
-                // Add cardinal neighbors
                 if (row > 0) {
                     int idx = (row - 1) * grid_size + col;
                     if (idx < swarm_size_) neighbors.push_back(idx);
@@ -943,7 +884,6 @@ std::vector<int> ParticleSwarmOptimization::getNeighbors(int particle_idx) {
             break;
             
         case TopologyType::RANDOM_DYNAMIC:
-            // Random neighbors (changes each call)
             {
                 neighbors.push_back(particle_idx);
                 std::vector<int> candidates;
@@ -953,7 +893,6 @@ std::vector<int> ParticleSwarmOptimization::getNeighbors(int particle_idx) {
                     if (i != particle_idx) candidates.push_back(i);
                 }
                 
-                // Shuffle and select first k neighbors
                 std::shuffle(candidates.begin(), candidates.end(), rng_);
                 int k = std::min(4, static_cast<int>(candidates.size()));
                 neighbors.insert(neighbors.end(), 
@@ -986,19 +925,12 @@ double ParticleSwarmOptimization::generateLevyNumber(std::mt19937& rng) {
     
     std::normal_distribution<> local_normal(0.0, 1.0);
     double u = local_normal(rng) * sigma_u;
-    double v = std::abs(local_normal(rng));
-    
-    // Avoid division by very small numbers
-    v = std::max(v, 1e-10);
+    double v = std::max(std::abs(local_normal(rng)), 1e-10);
     
     double levy_step = u / std::pow(v, 1.0 / levy_alpha_);
     
-    // Clamp the Lévy step to prevent explosive step sizes
-    // Typical values should be within a reasonable range (e.g., [-100, 100])
     const double max_levy_magnitude = 100.0;
-    levy_step = std::clamp(levy_step, -max_levy_magnitude, max_levy_magnitude);
-    
-    return levy_step;
+    return std::clamp(levy_step, -max_levy_magnitude, max_levy_magnitude);
 }
 
 Eigen::VectorXd ParticleSwarmOptimization::calculateMeanBestPosition(

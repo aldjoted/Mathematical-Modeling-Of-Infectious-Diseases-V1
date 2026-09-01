@@ -28,11 +28,9 @@ SimulationResult SimulationRunner::runSimulation(
     
     total_calls_++;
     
-    // Generate cache key from parameters
     Eigen::VectorXd param_vec = parametersToVector(params);
     size_t cache_key = hashParameterVector(param_vec);
     
-    // Check cache
     auto it = cache_.find(cache_key);
     if (it != cache_.end()) {
         cache_hits_++;
@@ -42,10 +40,8 @@ SimulationResult SimulationRunner::runSimulation(
         return it->second;
     }
     
-    // Cache miss - run simulation
     auto run_npi_strategy = model_template_->getNpiStrategy()->clone();
     
-    // Fix: Update NPI strategy with sampled kappa values
     auto piecewise_npi = std::dynamic_pointer_cast<PiecewiseConstantNpiStrategy>(run_npi_strategy);
     if (piecewise_npi) {
         const size_t expected_calibratable = piecewise_npi->getNumCalibratableNpiParams();
@@ -82,8 +78,6 @@ SimulationResult SimulationRunner::runSimulation(
                     "skipping NPI update to avoid throwing.");
             }
         }
-        // setKappaEndTimes is not available in PiecewiseConstantNpiStrategy
-        // Assuming end times are fixed during calibration or handled via constructor
     }
 
     auto run_model = std::make_shared<AgeSEPAIHRDModel>(params, run_npi_strategy);
@@ -100,7 +94,6 @@ SimulationResult SimulationRunner::runSimulation(
     
     SimulationResult result = simulator.run(initial_state, time_points);
     
-    // Store in cache
     if (result.isValid()) {
         cache_[cache_key] = result;
     } else {
@@ -122,29 +115,19 @@ std::pair<size_t, size_t> SimulationRunner::getCacheStats() const {
 }
 
 size_t SimulationRunner::hashParameterVector(const Eigen::VectorXd& param_vec) const {
-    // FIX Bug 4: Use boost::hash_combine pattern for better collision resistance
-    // Also include vector size in hash to catch length mismatches
     size_t hash = 0;
     
-    // Helper lambda implementing boost::hash_combine pattern
+    // boost::hash_combine pattern for better collision resistance
     auto hash_combine = [](size_t& seed, size_t value) {
-        // Golden ratio-based mixing (boost::hash_combine pattern)
         seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     };
     
-    // Include vector size in hash to prevent collisions between different-sized vectors
     hash_combine(hash, static_cast<size_t>(param_vec.size()));
     
     for (int i = 0; i < param_vec.size(); ++i) {
-        // Round to prevent floating-point precision issues causing cache misses
-        // Use a precision of 1e-12 to group nearly identical values
         double rounded = std::round(param_vec(i) * 1e12) / 1e12;
-        
-        // Use index in hash to distinguish position
         size_t value_hash = std::hash<double>{}(rounded);
         hash_combine(hash, value_hash);
-        
-        // Also mix in the index for position-sensitivity
         hash_combine(hash, static_cast<size_t>(i));
     }
     
@@ -152,10 +135,8 @@ size_t SimulationRunner::hashParameterVector(const Eigen::VectorXd& param_vec) c
 }
 
 Eigen::VectorXd SimulationRunner::parametersToVector(const SEPAIHRDParameters& params) const {
-    // Flatten all parameters into a single vector for hashing
     std::vector<double> flat_params;
     
-    // Basic scalars
     flat_params.push_back(params.beta);
     flat_params.push_back(params.sigma);
     flat_params.push_back(params.gamma_p);
@@ -166,7 +147,6 @@ Eigen::VectorXd SimulationRunner::parametersToVector(const SEPAIHRDParameters& p
     flat_params.push_back(params.theta);
     flat_params.push_back(params.contact_matrix_scaling_factor);
     
-    // Age-specific vectors
     for (int i = 0; i < params.p.size(); ++i) flat_params.push_back(params.p(i));
     for (int i = 0; i < params.h.size(); ++i) flat_params.push_back(params.h(i));
     for (int i = 0; i < params.icu.size(); ++i) flat_params.push_back(params.icu(i));
@@ -176,34 +156,28 @@ Eigen::VectorXd SimulationRunner::parametersToVector(const SEPAIHRDParameters& p
     for (int i = 0; i < params.h_infec.size(); ++i) flat_params.push_back(params.h_infec(i));
     for (int i = 0; i < params.N.size(); ++i) flat_params.push_back(params.N(i));
     
-    // Contact matrix (flatten row-major)
     for (int i = 0; i < params.M_baseline.rows(); ++i) {
         for (int j = 0; j < params.M_baseline.cols(); ++j) {
             flat_params.push_back(params.M_baseline(i, j));
         }
     }
     
-    // Kappa values
     for (const auto& kappa : params.kappa_values) {
         flat_params.push_back(kappa);
     }
     
-    // Kappa end times
     for (const auto& t : params.kappa_end_times) {
         flat_params.push_back(t);
     }
     
-    // Beta values  
     for (const auto& beta_val : params.beta_values) {
         flat_params.push_back(beta_val);
     }
     
-    // Beta end times
     for (const auto& t : params.beta_end_times) {
         flat_params.push_back(t);
     }
     
-    // Convert to Eigen vector
     Eigen::VectorXd param_vec(flat_params.size());
     for (size_t i = 0; i < flat_params.size(); ++i) {
         param_vec(i) = flat_params[i];

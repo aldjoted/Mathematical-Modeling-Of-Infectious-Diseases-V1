@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <map>
+#include <limits>
 
 namespace epidemic {
 
@@ -189,6 +190,11 @@ private:
     const double DEFAULT_LOWER_BOUND = constants::DEFAULT_NPI_LOWER_BOUND;
     /** @brief Default upper bound for NPI kappa parameters if not specified in param_bounds_map_. */
     const double DEFAULT_UPPER_BOUND = constants::DEFAULT_NPI_UPPER_BOUND;
+
+    // Cache for fast interval lookup when times are (mostly) non-decreasing.
+    // This is safe in the current design because each simulation uses a cloned model/strategy.
+    mutable size_t cached_period_index_ = 0;
+    mutable double cached_time_ = std::numeric_limits<double>::lowest();
 };
 
 } // namespace epidemic

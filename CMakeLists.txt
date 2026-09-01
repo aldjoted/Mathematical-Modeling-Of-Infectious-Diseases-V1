@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 3.10)
 project(SIR_Models LANGUAGES CXX)
 
+# Default to Release for performance unless explicitly set.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(EPIDEMIC_ENABLE_LTO "Enable link-time optimization (IPO/LTO)" OFF)
+option(EPIDEMIC_ENABLE_NATIVE "Enable -march=native / arch-specific optimizations" OFF)
+
 # Compiler settings
 set(WARNING_FLAGS
     -Wall
@@ -12,6 +20,13 @@ set(WARNING_FLAGS
 )
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+
+# Release build tuning
+set(EPIDEMIC_RELEASE_COMPILE_OPTS -O3 -DNDEBUG)
+set(EPIDEMIC_RELEASE_DEFINES EIGEN_NO_DEBUG)
+if(EPIDEMIC_ENABLE_NATIVE)
+    list(APPEND EPIDEMIC_RELEASE_COMPILE_OPTS -march=native)
+endif()
 
 # Dependencies
 find_package(GSL REQUIRED)
@@ -31,6 +46,8 @@ set(BASE_MODEL_SRCS
 add_library(sir_models_lib STATIC ${BASE_MODEL_SRCS})
 target_compile_features(sir_models_lib PUBLIC cxx_std_17)
 target_compile_options(sir_models_lib PRIVATE ${WARNING_FLAGS})
+target_compile_options(sir_models_lib PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(sir_models_lib PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_include_directories(sir_models_lib
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
@@ -94,6 +111,8 @@ set(EPIDEMIC_UTILS_SRCS
 add_library(epidemic_models_lib STATIC ${EPIDEMIC_MODELS_SRCS} ${EPIDEMIC_UTILS_SRCS})
 target_compile_features(epidemic_models_lib PUBLIC cxx_std_17)
 target_compile_options(epidemic_models_lib PRIVATE ${WARNING_FLAGS})
+target_compile_options(epidemic_models_lib PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(epidemic_models_lib PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_include_directories(epidemic_models_lib
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
@@ -131,7 +150,10 @@ set(AGE_SIR_CALIB_DEMO_SRC src/sir_age_structured/CalibrationDemo.cpp)
 set(SEPAIHRD_MAIN_NAME sepaihrd_age_structured_main)
 set(SEPAIHRD_MAIN_SRC src/model/main.cpp)
 
-set(ALL_MAIN_NAMES ${BASE_MAIN_NAMES} ${AGE_SIR_MAIN_NAME} ${AGE_SIR_CALIB_DEMO_NAME} ${SEPAIHRD_MAIN_NAME})
+set(SEPAIHRD_OBJECTIVE_BENCH_NAME sepaihrd_objective_benchmark)
+set(SEPAIHRD_OBJECTIVE_BENCH_SRC src/model/sepaihrd_objective_benchmark_main.cpp)
+
+set(ALL_MAIN_NAMES ${BASE_MAIN_NAMES} ${AGE_SIR_MAIN_NAME} ${AGE_SIR_CALIB_DEMO_NAME} ${SEPAIHRD_MAIN_NAME} ${SEPAIHRD_OBJECTIVE_BENCH_NAME})
 
 # Build base executables
 list(LENGTH BASE_MAIN_NAMES _num_base_apps)
@@ -151,18 +173,32 @@ endif()
 add_executable(${AGE_SIR_MAIN_NAME} ${AGE_SIR_MAIN_SRC})
 target_compile_features(${AGE_SIR_MAIN_NAME} PUBLIC cxx_std_17)
 target_compile_options(${AGE_SIR_MAIN_NAME} PRIVATE ${WARNING_FLAGS})
+target_compile_options(${AGE_SIR_MAIN_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(${AGE_SIR_MAIN_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_link_libraries(${AGE_SIR_MAIN_NAME} PRIVATE epidemic_models_lib)
 
 add_executable(${AGE_SIR_CALIB_DEMO_NAME} ${AGE_SIR_CALIB_DEMO_SRC})
 target_compile_features(${AGE_SIR_CALIB_DEMO_NAME} PUBLIC cxx_std_17)
 target_compile_options(${AGE_SIR_CALIB_DEMO_NAME} PRIVATE ${WARNING_FLAGS})
+target_compile_options(${AGE_SIR_CALIB_DEMO_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(${AGE_SIR_CALIB_DEMO_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_link_libraries(${AGE_SIR_CALIB_DEMO_NAME} PRIVATE epidemic_models_lib) 
 
 # Build age-structured SEPAIHRD executable
 add_executable(${SEPAIHRD_MAIN_NAME} ${SEPAIHRD_MAIN_SRC})
 target_compile_features(${SEPAIHRD_MAIN_NAME} PUBLIC cxx_std_17)
 target_compile_options(${SEPAIHRD_MAIN_NAME} PRIVATE ${WARNING_FLAGS})
+target_compile_options(${SEPAIHRD_MAIN_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(${SEPAIHRD_MAIN_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_link_libraries(${SEPAIHRD_MAIN_NAME} PRIVATE epidemic_models_lib) 
+
+# Benchmark executable (objective timing + cache hit rate)
+add_executable(${SEPAIHRD_OBJECTIVE_BENCH_NAME} ${SEPAIHRD_OBJECTIVE_BENCH_SRC})
+target_compile_features(${SEPAIHRD_OBJECTIVE_BENCH_NAME} PUBLIC cxx_std_17)
+target_compile_options(${SEPAIHRD_OBJECTIVE_BENCH_NAME} PRIVATE ${WARNING_FLAGS})
+target_compile_options(${SEPAIHRD_OBJECTIVE_BENCH_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(${SEPAIHRD_OBJECTIVE_BENCH_NAME} PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
+target_link_libraries(${SEPAIHRD_OBJECTIVE_BENCH_NAME} PRIVATE epidemic_models_lib)
 
 
 # --- Test Setup ---
@@ -176,6 +212,8 @@ file(GLOB UTILS_TEST_SRCS
 add_executable(utils_tests ${UTILS_TEST_SRCS})
 target_compile_features(utils_tests PUBLIC cxx_std_17)
 target_compile_options(utils_tests PRIVATE ${WARNING_FLAGS})
+target_compile_options(utils_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(utils_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_include_directories(utils_tests PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(utils_tests
     PRIVATE
@@ -195,6 +233,8 @@ file(GLOB MODEL_TEST_SRCS
 add_executable(model_tests ${MODEL_TEST_SRCS})
 target_compile_features(model_tests PUBLIC cxx_std_17)
 target_compile_options(model_tests PRIVATE ${WARNING_FLAGS})
+target_compile_options(model_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(model_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_include_directories(model_tests PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(model_tests
     PRIVATE
@@ -213,6 +253,8 @@ file(GLOB SIR_AGE_STRUCTURED_TEST_SRCS
 add_executable(sir_age_structured_tests ${SIR_AGE_STRUCTURED_TEST_SRCS})
 target_compile_features(sir_age_structured_tests PUBLIC cxx_std_17)
 target_compile_options(sir_age_structured_tests PRIVATE ${WARNING_FLAGS})
+target_compile_options(sir_age_structured_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_COMPILE_OPTS}>)
+target_compile_definitions(sir_age_structured_tests PRIVATE $<$<CONFIG:Release>:${EPIDEMIC_RELEASE_DEFINES}>)
 target_include_directories(sir_age_structured_tests PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(sir_age_structured_tests
     PRIVATE
@@ -225,6 +267,23 @@ add_test(NAME SirAgeStructuredTests COMMAND sir_age_structured_tests)
 
 # --- Output directory ---
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin CACHE PATH "Executable output directory")
+
+# Optional LTO/IPO (best effort)
+if(EPIDEMIC_ENABLE_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _ipo_supported OUTPUT _ipo_error)
+    if(_ipo_supported)
+        set_property(TARGET sir_models_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set_property(TARGET epidemic_models_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        foreach(_t IN LISTS ALL_MAIN_NAMES)
+            if(TARGET ${_t})
+                set_property(TARGET ${_t} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+            endif()
+        endforeach()
+    else()
+        message(WARNING "IPO/LTO requested but not supported: ${_ipo_error}")
+    endif()
+endif()
 
 # Valgrind memory checks
 find_program(VALGRIND_EXECUTABLE valgrind)

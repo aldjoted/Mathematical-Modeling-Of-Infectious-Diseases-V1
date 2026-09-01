@@ -1,22 +1,21 @@
 #include "sir_age_structured/optimizers/MetropolisHastingsSampler.hpp"
+#include "model/parameters/SEPAIHRDParameterManager.hpp"
 #include "utils/Logger.hpp"
 #include "utils/FileUtils.hpp"
 
 #include <Eigen/Cholesky>
+#include <Eigen/Eigenvalues>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
 #include <fstream>
 #include <numeric>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
+#include <algorithm>
 
 namespace epidemic {
 
     static Logger& logger = Logger::getInstance();
-    static const std::string LOG_SOURCE = "MCMC_SA";
+    static const std::string LOG_SOURCE = "MCMC_AM"; // Adaptive Metropolis
 
     MetropolisHastingsSampler::MetropolisHastingsSampler() {
         std::random_device rd;
@@ -29,21 +28,25 @@ namespace epidemic {
             return (it != settings.end()) ? it->second : def;
         };
 
-        iterations_ = static_cast<int>(get("mcmc_iterations", 5000.0));
+        iterations_ = static_cast<int>(get("mcmc_iterations", 10000.0));
+        burn_in_ = static_cast<int>(get("burn_in", 1000.0));
+        adaptation_period_ = static_cast<int>(get("adaptation_period", 100.0));
         report_interval_ = static_cast<int>(get("report_interval", 100.0));
         thinning_ = std::max(1, static_cast<int>(get("thinning", 1.0)));
-        
-        // Simulated Annealing Parameters
-        initial_temp_ = get("sa_initial_temp", 100.0);
-        cooling_rate_ = get("sa_cooling_rate", 0.999);
-        step_all_prob_ = get("step_all_prob", 0.4);
-        cloud_size_multiplier_ = std::max(1, static_cast<int>(get("cloud_size_multiplier", 2.0)));
+        regularization_epsilon_ = get("regularization_epsilon", 1e-6);
+        target_acceptance_rate_ = get("target_acceptance_rate", 0.234);
+        adapt_scale_ = (get("adapt_scale", 1.0) != 0.0);
 
-        logger.info(LOG_SOURCE, "Configured SA-MCMC: Iter=" + std::to_string(iterations_) +
-            ", T0=" + std::to_string(initial_temp_) +
-            ", CoolRate=" + std::to_string(cooling_rate_) + 
-            ", GlobalStepProb=" + std::to_string(step_all_prob_) +
-            ", CloudMultiplier=" + std::to_string(cloud_size_multiplier_));
+        // Optional I/O controls
+        store_samples_ = (get("store_samples", 1.0) != 0.0);
+        write_checkpoints_ = (get("write_checkpoints", 1.0) != 0.0);
+        write_trace_ = (get("write_trace", 1.0) != 0.0);
+
+        logger.info(LOG_SOURCE, "Configured Adaptive Metropolis: Iterations=" + std::to_string(iterations_) + 
+                                ", Burn-In=" + std::to_string(burn_in_) +
+                                ", AdaptPeriod=" + std::to_string(adaptation_period_) +
+                                ", TargetAccRate=" + std::to_string(target_acceptance_rate_) +
+                                ", AdaptScale=" + std::to_string(adapt_scale_));
     }
 
     void MetropolisHastingsSampler::setInitialCovariance(const Eigen::MatrixXd& cov) {
@@ -62,7 +65,7 @@ namespace epidemic {
     double MetropolisHastingsSampler::safeEvaluate(IObjectiveFunction& func, const Eigen::VectorXd& p) {
         try {
             double val = func.calculate(p);
-            // Treat NaN/Inf as extremely low likelihood (effectively -infinity)
+            // Treat NaN/Inf as effectively -infinity (zero probability)
             if (std::isnan(val) || std::isinf(val)) return -1e18;
             return val;
         } catch (...) {
@@ -70,281 +73,339 @@ namespace epidemic {
         }
     }
 
-    // --- 1. Random Step All (Global Correlated Move) ---
-    // Corresponds to legacy 'random_step_all' but uses adaptive covariance 
-    // to handle parameter correlations correctly.
-    Eigen::VectorXd MetropolisHastingsSampler::randomStepAll(
-        const Eigen::VectorXd& currentParams,
-        const Eigen::MatrixXd& choleskyCov,
-        double scale,
-        IParameterManager& pm) {
-        
-        std::normal_distribution<> norm(0.0, 1.0);
-        int n = static_cast<int>(currentParams.size());
-
-        // Generate standard normal vector
-        Eigen::VectorXd z(n);
-        for(int i=0; i<n; ++i) z(i) = norm(gen_);
-
-        // Apply correlated perturbation: x_new = x + scale * L * z
-        Eigen::VectorXd perturbation = scale * (choleskyCov * z);
-        
-        return pm.applyConstraints(currentParams + perturbation);
+    bool MetropolisHastingsSampler::areParametersValid(
+        const Eigen::VectorXd& params, 
+        IParameterManager& pm) const 
+    {
+        // Check if all parameters are within their defined bounds
+        for (int i = 0; i < params.size(); ++i) {
+            double lower = pm.getLowerBoundForParamIndex(i);
+            double upper = pm.getUpperBoundForParamIndex(i);
+            if (params(i) < lower || params(i) > upper) {
+                return false;
+            }
+        }
+        return true;
     }
 
-    // --- 2. Random Step One (Local Axis-Aligned Move) ---
-    // Corresponds to legacy 'random_step_one'. Perturbs only one dimension.
-    Eigen::VectorXd MetropolisHastingsSampler::randomStepOne(
-        const Eigen::VectorXd& currentParams,
-        IParameterManager& pm) {
-        
-        std::uniform_int_distribution<> dist_idx(0, static_cast<int>(currentParams.size()) - 1);
-        std::normal_distribution<> norm(0.0, 1.0);
+    Eigen::VectorXd MetropolisHastingsSampler::generateProposal(const Eigen::VectorXd& currentParams) {
+        // Generate Z ~ N(0, I)
+        Eigen::VectorXd z(currentParams.size());
+        std::normal_distribution<double> dist(0.0, 1.0);
+        for (int i = 0; i < currentParams.size(); ++i) {
+            z(i) = dist(gen_);
+        }
 
-        int idx = dist_idx(gen_);
-        double sigma = pm.getSigmaForParamIndex(idx);
-
-        Eigen::VectorXd candidate = currentParams;
-        // Apply perturbation to single index
-        candidate(idx) += norm(gen_) * sigma;
-
-        return pm.applyConstraints(candidate);
+        // Y = X + scale * L * Z
+        // If proposal_cholesky_ encodes covariance Sigma = L*L^T, then scale*L*Z ~ N(0, scale^2*Sigma)
+        return currentParams + global_scale_ * (proposal_cholesky_ * z);
     }
 
-    // --- 3. Thread-safe Candidate Generation for Parallel Cloud ---
-    // Generates a candidate using a thread-local RNG for parallel execution
-    Eigen::VectorXd MetropolisHastingsSampler::generateCandidate(
-        const Eigen::VectorXd& currentParams,
-        const Eigen::MatrixXd& choleskyCov,
-        double scale,
-        IParameterManager& pm,
-        std::mt19937& localGen) {
+    void MetropolisHastingsSampler::adaptGlobalScale(bool accepted, int step) {
+        // Robbins-Monro stochastic approximation: log(scale) += gamma * (alpha - target)
+        if (!adapt_scale_) return;
         
-        std::uniform_real_distribution<> uniform(0.0, 1.0);
-        std::normal_distribution<> norm(0.0, 1.0);
+        recent_accepts_.push_back(accepted ? 1 : 0);
+        if (recent_accepts_.size() > 1000) {
+            recent_accepts_.pop_front();
+        }
         
-        int n = static_cast<int>(currentParams.size());
-        bool isGlobal = (uniform(localGen) < step_all_prob_);
+        double recent_acc_rate = 0.0;
+        if (!recent_accepts_.empty()) {
+            int sum = 0;
+            for (int a : recent_accepts_) sum += a;
+            recent_acc_rate = static_cast<double>(sum) / recent_accepts_.size();
+        }
         
-        if (isGlobal) {
-            // Global Move (Correlated)
-            Eigen::VectorXd z(n);
-            for(int i = 0; i < n; ++i) z(i) = norm(localGen);
-            Eigen::VectorXd perturbation = scale * (choleskyCov * z);
-            return pm.applyConstraints(currentParams + perturbation);
+        // Emergency heuristics for critically low acceptance
+        if (recent_accepts_.size() >= 1000 && recent_acc_rate < 0.001) {
+            log_scale_ -= 0.7;  // Halve the scale
+            emergency_shrink_count_++;
+            if (emergency_shrink_count_ % 10 == 1) {
+                Logger::getInstance().warning(LOG_SOURCE, 
+                    "Emergency scale shrink #" + std::to_string(emergency_shrink_count_) + 
+                    " at step " + std::to_string(step) + ". New scale: " + 
+                    std::to_string(std::exp(log_scale_)));
+            }
+        }
+        else if (recent_acc_rate < 0.02 && recent_accepts_.size() >= 500) {
+            // Aggressive shrinking for very low acceptance
+            double gamma_fast = 5.0 / std::sqrt(static_cast<double>(step) + 1.0);
+            gamma_fast = std::min(gamma_fast, 0.3);
+            log_scale_ += gamma_fast * (0.0 - target_acceptance_rate_);
+        }
+        else {
+            // Standard Robbins-Monro update
+            double gamma = 1.0 / std::sqrt(static_cast<double>(step) + 1.0);
+            gamma = std::min(gamma, 0.1);
+            double accept_indicator = accepted ? 1.0 : 0.0;
+            log_scale_ += gamma * (accept_indicator - target_acceptance_rate_);
+        }
+        
+        // Allow scale recovery if stuck at floor but acceptance improving
+        if (global_scale_ <= 0.011 && recent_acc_rate > 0.15 && recent_acc_rate < 0.30) {
+            log_scale_ += 0.01;
+        }
+        
+        log_scale_ = std::max(std::min(log_scale_, 2.3), -6.9);
+        global_scale_ = std::exp(log_scale_);
+    }
+
+    void MetropolisHastingsSampler::updateCovarianceRank1(int step, int /* n_params */) {
+        // Welford-style rank-1 update with adaptation rate gamma = 10.0 / (t + 100)
+        if (chain_history_.empty()) return;
+        
+        const Eigen::VectorXd& new_sample = chain_history_.back();
+        
+        double gamma = 10.0 / (step + 100.0);
+        
+        Eigen::VectorXd diff = new_sample - running_mean_;
+        running_mean_ += gamma * diff;
+        
+        current_covariance_ = (1.0 - gamma) * current_covariance_ + gamma * (diff * diff.transpose());
+    }
+
+    void MetropolisHastingsSampler::recomputeFullCovariance(int n_params) {
+        // Full covariance recomputation to correct accumulated numerical errors
+        if (chain_history_.size() < static_cast<size_t>(n_params) + 10) return;
+
+        Eigen::VectorXd mean = Eigen::VectorXd::Zero(n_params);
+        for (const auto& vec : chain_history_) {
+            mean += vec;
+        }
+        mean /= static_cast<double>(chain_history_.size());
+        running_mean_ = mean;
+
+        Eigen::MatrixXd centered(chain_history_.size(), n_params);
+        for (size_t i = 0; i < chain_history_.size(); ++i) {
+            centered.row(i) = chain_history_[i] - mean;
+        }
+
+        Eigen::MatrixXd cov = (centered.adjoint() * centered) / double(chain_history_.size() - 1);
+
+        // Optimal scaling: (2.38^2) / d (Roberts & Rosenthal 2001)
+        double scaling_factor = (2.38 * 2.38) / static_cast<double>(n_params);
+
+        current_covariance_ = (scaling_factor * cov) + 
+                              (regularization_epsilon_ * Eigen::MatrixXd::Identity(n_params, n_params));
+
+        Eigen::LLT<Eigen::MatrixXd> llt(current_covariance_);
+        if (llt.info() == Eigen::Success) {
+            proposal_cholesky_ = llt.matrixL();
+            logger.debug(LOG_SOURCE, "Full covariance recomputation successful.");
         } else {
-            // Local Move (One Parameter)
-            std::uniform_int_distribution<> dist_idx(0, n - 1);
-            int idx = dist_idx(localGen);
-            double sigma = pm.getSigmaForParamIndex(idx);
-            
-            Eigen::VectorXd candidate = currentParams;
-            candidate(idx) += norm(localGen) * sigma;
-            return pm.applyConstraints(candidate);
+            logger.warning(LOG_SOURCE, "Full covariance recomputation failed (singular). Keeping previous kernel.");
         }
     }
 
     OptimizationResult MetropolisHastingsSampler::optimize(
         const Eigen::VectorXd& initialParameters,
         IObjectiveFunction& objectiveFunction,
-        IParameterManager& parameterManager) {
-        
-        OptimizationResult result;
-        result.bestParameters = initialParameters;
-        result.bestObjectiveValue = safeEvaluate(objectiveFunction, initialParameters);
-        
-        // Current state
-        Eigen::VectorXd currentParams = initialParameters;
-        double currentLikelihood = result.bestObjectiveValue;
+        IParameterManager& parameterManager) 
+    {
+        // Enable MCMC Reflection Mode for valid Bayesian sampling
+        if (auto* casted_pm = dynamic_cast<SEPAIHRDParameterManager*>(&parameterManager)) {
+            casted_pm->setConstraintMode(ConstraintMode::MCMC_REFLECT);
+            logger.info(LOG_SOURCE, "Constraint mode set to MCMC_REFLECT for valid Bayesian sampling.");
+        }
 
-        // --- Adaptive Metropolis Setup ---
+        OptimizationResult result;
         int n_params = static_cast<int>(initialParameters.size());
+
+        // --- Initialization ---
+        Eigen::VectorXd current_x = initialParameters;
         
-        // --- 1. Covariance Initialization ---
-        // Use Phase 1 covariance if available (warm start), otherwise initialize from sigmas
-        Eigen::MatrixXd cov;
+        // Initialize covariance matrix
         if (hasInitialCovariance_ && 
             initialCovariance_.rows() == n_params && 
             initialCovariance_.cols() == n_params) {
-            logger.info(LOG_SOURCE, "Importing learned covariance from Phase 1 for warm start.");
-            cov = initialCovariance_;
+            logger.info(LOG_SOURCE, "Warm-starting with covariance from Phase 1.");
+            current_covariance_ = initialCovariance_;
         } else {
-            // Initial covariance (diagonal based on sigmas)
-            cov = Eigen::MatrixXd::Identity(n_params, n_params);
-            for(int i=0; i<n_params; ++i) {
+            // Initialize with diagonal covariance from proposal sigmas
+            current_covariance_ = Eigen::MatrixXd::Identity(n_params, n_params);
+            for (int i = 0; i < n_params; ++i) {
                 double s = parameterManager.getSigmaForParamIndex(i);
-                cov(i,i) = (s > 0 ? s*s : 1e-6);
+                current_covariance_(i, i) = (s > 0 ? s * s : 1e-6);
             }
-        }
-
-        // Cholesky decomposition of covariance
-        Eigen::MatrixXd L = cov.llt().matrixL();
-        
-        // Track mean for AM update
-        Eigen::VectorXd meanParams = initialParameters;
-
-        // Simulated Annealing State
-        double T = initial_temp_;
-        std::uniform_real_distribution<> uniform(0.0, 1.0);
-        
-        // Stats
-        int accepted = 0;
-        int cloud_improvements = 0;
-
-        // --- Parallel Candidate Cloud Setup ---
-        #ifdef _OPENMP
-        int num_threads = omp_get_max_threads();
-        #else
-        int num_threads = 1;
-        #endif
-        int cloud_size = num_threads * cloud_size_multiplier_;
-        
-        // --- 2. Robust RNG Setup (using seed_seq for proper statistical independence) ---
-        std::vector<std::mt19937> thread_rngs(cloud_size);
-        std::random_device rd;
-        // Generate a sequence of seeds to ensure independence across threads
-        std::vector<unsigned int> seed_data(cloud_size * 4);
-        for(auto& s : seed_data) s = rd();
-        std::seed_seq seq(seed_data.begin(), seed_data.end());
-        
-        // Generate actual seeds from seed_seq
-        std::vector<unsigned int> actual_seeds(cloud_size);
-        seq.generate(actual_seeds.begin(), actual_seeds.end());
-        
-        for (int i = 0; i < cloud_size; ++i) {
-            thread_rngs[i].seed(actual_seeds[i]);
+            // Apply initial scaling factor
+            double scaling_factor = (2.38 * 2.38) / static_cast<double>(n_params);
+            current_covariance_ *= scaling_factor;
         }
         
-        // Pre-compute optimal scale for global moves
-        double global_scale = 2.38 / std::sqrt(n_params);
+        // Add regularization
+        current_covariance_ += regularization_epsilon_ * Eigen::MatrixXd::Identity(n_params, n_params);
         
-        logger.info(LOG_SOURCE, "Starting Optimization Loop. Initial Likelihood: " + std::to_string(currentLikelihood) +
-                    " | CloudSize=" + std::to_string(cloud_size) + " (Threads=" + std::to_string(num_threads) + ")");
+        // Compute initial Cholesky decomposition
+        Eigen::LLT<Eigen::MatrixXd> llt(current_covariance_);
+        if (llt.info() != Eigen::Success) {
+            logger.warning(LOG_SOURCE, "Initial covariance Cholesky failed. Using identity.");
+            proposal_cholesky_ = Eigen::MatrixXd::Identity(n_params, n_params) * 0.1;
+        } else {
+            proposal_cholesky_ = llt.matrixL();
+        }
 
-        for (int iter = 0; iter < iterations_; ++iter) {
+        // Initialize running mean
+        running_mean_ = initialParameters;
+        
+        // Initialize global scale for adaptive scaling
+        log_scale_ = 0.0;
+        global_scale_ = 1.0;
+
+        // Evaluate initial state
+        // IMPORTANT: objectiveFunction.calculate() returns Log-Posterior (or Log-Likelihood)
+        double current_log_post = safeEvaluate(objectiveFunction, current_x);
+        
+        // Storage setup
+        chain_history_.clear();
+        chain_history_.reserve(iterations_);
+        chain_history_.push_back(current_x);
+
+        // Result container
+        if (store_samples_) {
+            result.samples.reserve(iterations_ / thinning_);
+            result.sampleObjectiveValues.reserve(iterations_ / thinning_);
+            result.samples.push_back(current_x);
+            result.sampleObjectiveValues.push_back(current_log_post);
+        }
+
+        // Track best (for MAP estimate)
+        result.bestParameters = current_x;
+        result.bestObjectiveValue = current_log_post;
+
+        int accepted_count = 0;
+        std::uniform_real_distribution<double> u_dist(0.0, 1.0);
+
+        logger.info(LOG_SOURCE, "Starting Bayesian AM-MCMC. Params: " + std::to_string(n_params) +
+                    " | Initial LogPost: " + std::to_string(current_log_post));
+
+        // --- MCMC Loop ---
+        for (int t = 1; t < iterations_; ++t) {
             
-            // 1. Generate Parallel Candidate Cloud
-            std::vector<Eigen::VectorXd> candidateCloud(cloud_size);
-            std::vector<double> candidateLikelihoods(cloud_size);
-            
-            #pragma omp parallel for schedule(dynamic)
-            for (int c = 0; c < cloud_size; ++c) {
-                // Generate candidate using thread-local RNG
-                candidateCloud[c] = generateCandidate(
-                    currentParams, L, global_scale, parameterManager, thread_rngs[c]);
+            // 1. Adaptation Step (only after burn-in and periodically)
+            if (t > burn_in_) {
+                // Rank-1 update every iteration after burn-in
+                updateCovarianceRank1(t, n_params);
                 
-                // Evaluate candidate
-                candidateLikelihoods[c] = safeEvaluate(objectiveFunction, candidateCloud[c]);
-            }
-
-            // 2. Find Best Candidate from Cloud
-            int bestIdx = 0;
-            double bestCloudLikelihood = candidateLikelihoods[0];
-            for (int c = 1; c < cloud_size; ++c) {
-                if (candidateLikelihoods[c] > bestCloudLikelihood) {
-                    bestCloudLikelihood = candidateLikelihoods[c];
-                    bestIdx = c;
-                }
-            }
-            
-            Eigen::VectorXd candidateParams = candidateCloud[bestIdx];
-            double candidateLikelihood = bestCloudLikelihood;
-            
-            // Track if cloud found improvement over all candidates
-            if (candidateLikelihood > currentLikelihood) {
-                cloud_improvements++;
-            }
-
-            // 3. Acceptance Criteria (Simulated Annealing on Best Candidate)
-            // Delta L (Maximization problem)
-            double deltaL = candidateLikelihood - currentLikelihood;
-            
-            bool accept = false;
-            if (deltaL > 0) {
-                // Always accept improvement
-                accept = true;
-            } else {
-                // Accept degradation with probability exp(delta / T)
-                // Note: deltaL is negative here
-                double acceptanceProb = std::exp(deltaL / T);
-                if (uniform(gen_) < acceptanceProb) {
-                    accept = true;
-                }
-            }
-
-            // 4. Update State
-            if (accept) {
-                currentParams = candidateParams;
-                currentLikelihood = candidateLikelihood;
-                accepted++;
-
-                // Update Global Best?
-                if (currentLikelihood > result.bestObjectiveValue) {
-                    result.bestObjectiveValue = currentLikelihood;
-                    result.bestParameters = currentParams;
-                    // Logging immediate breakthrough can be helpful
-                    if (iter % report_interval_ == 0) {
-                         logger.info(LOG_SOURCE, "[NEW BEST] Iter " + std::to_string(iter) + 
-                                     " | L=" + std::to_string(currentLikelihood));
+                // Full recomputation every adaptation_period_ iterations
+                if (t % adaptation_period_ == 0) {
+                    recomputeFullCovariance(n_params);
+                    
+                    // Recompute Cholesky
+                    Eigen::MatrixXd cov_stable = current_covariance_ + 
+                                                 regularization_epsilon_ * Eigen::MatrixXd::Identity(n_params, n_params);
+                    Eigen::LLT<Eigen::MatrixXd> llt_update(cov_stable);
+                    if (llt_update.info() == Eigen::Success) {
+                        proposal_cholesky_ = llt_update.matrixL();
                     }
                 }
             }
 
-            // 5. Sample Storage (Thinning)
-            if (iter % thinning_ == 0) {
-                result.samples.push_back(currentParams);
-                result.sampleObjectiveValues.push_back(currentLikelihood);
-            }
+            // 2. Propose new state: X' ~ N(X, scale^2 * Sigma)
+            Eigen::VectorXd proposed_x_raw = generateProposal(current_x);
+            
+            // 2b. Apply constraints (reflection for MCMC mode) to keep proposals in bounds
+            // This is CRITICAL in high dimensions - raw proposals almost always violate bounds
+            Eigen::VectorXd proposed_x = parameterManager.applyConstraints(proposed_x_raw);
 
-            // 6. Adaptive Covariance Update (Haario et al.)
-            // Recursive update of covariance matrix to learn correlations
-            // Use a floor on gamma to prevent covariance adaptation from freezing too early
-            if (iter > 100) { 
-                // Learning rate with floor: prevents freezing if chain hasn't converged
-                double gamma = std::max(0.01, 10.0 / (iter + 100.0));
-                Eigen::VectorXd diff = currentParams - meanParams;
-                meanParams += gamma * diff;
-                
-                // Rank-1 update
-                cov = (1.0 - gamma) * cov + gamma * (diff * diff.transpose());
-                
-                // Recompute Cholesky every 50 iterations to keep proposal in sync with learned covariance
-                // (Previously 500 was too infrequent - only 10 updates in 5000 iterations)
-                if (iter % 50 == 0) {
-                    // Add small epsilon to diagonal for numerical stability
-                    Eigen::MatrixXd cov_stable = cov + 1e-6 * Eigen::MatrixXd::Identity(n_params, n_params);
-                    L = cov_stable.llt().matrixL();
+            // 3. Evaluate likelihood (constraints already applied, so proposal is valid)
+            double proposed_log_post = safeEvaluate(objectiveFunction, proposed_x);
+
+            // 4. Metropolis-Hastings Acceptance Ratio (Log Space)
+            // log_alpha = log_pi(x') - log_pi(x) + log_q(x|x') - log_q(x'|x)
+            // For symmetric proposal N(x, Sigma): q(x|x') = q(x'|x), so:
+            // log_alpha = log_pi(x') - log_pi(x)
+            double log_ratio = proposed_log_post - current_log_post;
+
+            // 5. Accept / Reject
+            bool accept = false;
+            if (log_ratio >= 0.0) {
+                // Always accept if proposal is better
+                accept = true;
+            } else {
+                // Accept with probability exp(log_ratio)
+                if (std::log(u_dist(gen_)) < log_ratio) {
+                    accept = true;
                 }
             }
 
-            // 7. Cooling Schedule
-            T *= cooling_rate_;
+            // 6. Update state
+            if (accept) {
+                current_x = proposed_x;
+                current_log_post = proposed_log_post;
+                accepted_count++;
 
-            // 8. Progress Report & Checkpointing
-            if ((iter + 1) % report_interval_ == 0) {
+                // Update MAP estimate
+                if (current_log_post > result.bestObjectiveValue) {
+                    result.bestObjectiveValue = current_log_post;
+                    result.bestParameters = current_x;
+                }
+            }
+            // Else: we keep current_x (repeat current state in chain)
+
+            // 6b. Adapt global scale based on acceptance
+            // Scale adaptation runs from the start to avoid wasting burn-in with 0% acceptance
+            // The adaptation rate naturally diminishes with t via the 1/(t+1) factor
+            if (adapt_scale_) {
+                adaptGlobalScale(accept, t);
+            }
+
+            // 7. Store sample in chain history (always, for covariance estimation)
+            chain_history_.push_back(current_x);
+            
+            // Store in result (with thinning)
+            if (store_samples_ && (t % thinning_ == 0)) {
+                result.samples.push_back(current_x);
+                result.sampleObjectiveValues.push_back(current_log_post);
+            }
+
+            // 8. Logging & Checkpointing
+            if ((t + 1) % report_interval_ == 0) {
+                double acc_rate = static_cast<double>(accepted_count) / (t + 1);
                 std::stringstream ss;
-                ss << "Iter " << std::setw(5) << (iter + 1) 
-                   << " | T=" << std::fixed << std::setprecision(4) << T
-                   << " | CurL=" << std::setprecision(2) << currentLikelihood
-                   << " | BestL=" << std::setprecision(2) << result.bestObjectiveValue
-                   << " | AccRate=" << std::setprecision(1) << (100.0 * accepted / (iter + 1)) << "%"
-                   << " | CloudImprv=" << std::setprecision(1) << (100.0 * cloud_improvements / (iter + 1)) << "%";
+                ss << "Iter: " << std::setw(6) << (t + 1) 
+                   << " | LogPost: " << std::fixed << std::setprecision(2) << current_log_post 
+                   << " | Best: " << std::setprecision(2) << result.bestObjectiveValue
+                   << " | AccRate: " << std::setprecision(1) << (acc_rate * 100.0) << "%"
+                   << " | Scale: " << std::setprecision(3) << global_scale_;
                 logger.info(LOG_SOURCE, ss.str());
-
-                // Save checkpoint
-                saveCheckpoint(result, parameterManager, false);
+                
+                // Warn if acceptance rate is critically low (optimal is ~23.4% for RWM)
+                if (t > burn_in_ && acc_rate < 0.05) {
+                    logger.warning(LOG_SOURCE, "Acceptance rate low (<5%). Scale adaptation working to correct.");
+                } else if (t > burn_in_ && acc_rate > 0.50) {
+                    logger.warning(LOG_SOURCE, "Acceptance rate high (>50%). Scale adaptation working to correct.");
+                }
+                
+                if (write_checkpoints_ && store_samples_) {
+                    saveCheckpoint(result, parameterManager, false);
+                }
             }
         }
 
-        // Final Save
-        saveCheckpoint(result, parameterManager, true);
+        // --- Finalization ---
+        double final_acc_rate = static_cast<double>(accepted_count) / iterations_;
+        logger.info(LOG_SOURCE, "Sampling Complete. Final Acceptance Rate: " + 
+                    std::to_string(final_acc_rate * 100.0) + "% | Final Scale: " +
+                    std::to_string(global_scale_));
+        
+        // Store final covariance for potential use in future runs
+        result.finalCovariance = current_covariance_;
+        result.additionalStats["acceptance_rate"] = final_acc_rate;
+        result.additionalStats["final_scale"] = global_scale_;
+        result.additionalStats["burn_in"] = static_cast<double>(burn_in_);
+        result.additionalStats["total_iterations"] = static_cast<double>(iterations_);
 
-        if (!result.samples.empty()) {
+        if (write_checkpoints_ && store_samples_) {
+            saveCheckpoint(result, parameterManager, true);
+        }
+
+        if (write_trace_ && store_samples_ && !result.samples.empty()) {
             std::string dir = FileUtils::joinPaths(FileUtils::getProjectRoot(), "data/mcmc_samples");
             FileUtils::ensureDirectoryExists(dir);
-            std::string path = FileUtils::joinPaths(dir, "sa_optimization_trace.csv");
-            
-            saveSamplesToCSV(result.samples, result.sampleObjectiveValues, parameterManager.getParameterNames(), path);
+            std::string path = FileUtils::joinPaths(dir, "posterior_trace.csv");
+            saveSamplesToCSV(result.samples, result.sampleObjectiveValues, 
+                             parameterManager.getParameterNames(), path);
         }
 
         return result;
@@ -362,18 +423,18 @@ namespace epidemic {
             return;
         }
 
-        file << "iter,objective";
+        file << "iter,log_posterior";
         for (const auto& name : parameterNames) file << "," << name;
         file << "\n";
 
         for (size_t i = 0; i < samples.size(); ++i) {
-            file << i << "," << objectiveValues[i];
+            file << i << "," << std::scientific << std::setprecision(6) << objectiveValues[i];
             for (int j = 0; j < samples[i].size(); ++j) {
-                file << "," << std::scientific << std::setprecision(10) << samples[i][j];
+                file << "," << samples[i][j];
             }
             file << "\n";
         }
-        logger.info(LOG_SOURCE, "Saved full trace to: " + filepath);
+        logger.info(LOG_SOURCE, "Full posterior trace saved to: " + filepath);
     }
 
     void MetropolisHastingsSampler::saveCheckpoint(const OptimizationResult& res, 
@@ -381,27 +442,30 @@ namespace epidemic {
                                                    bool final) {
         if (res.samples.empty()) return;
 
-        std::string dir = FileUtils::joinPaths(FileUtils::getProjectRoot(), "data/checkpoints");
+        std::string dir = FileUtils::joinPaths(FileUtils::getProjectRoot(), "data/mcmc_samples");
         FileUtils::ensureDirectoryExists(dir);
-        std::string fname = final ? "opt_final.csv" : "opt_checkpoint.csv";
+        std::string fname = final ? "posterior_trace_final.csv" : "posterior_trace_checkpoint.csv";
         std::string path = FileUtils::joinPaths(dir, fname);
         
         std::ofstream file(path);
-        if(file.is_open()) {
-            file << "step,logL";
-            for(const auto& n : pm.getParameterNames()) file << "," << n;
+        if (file.is_open()) {
+            file << "iter,log_posterior";
+            auto names = pm.getParameterNames();
+            for (const auto& n : names) file << "," << n;
             file << "\n";
             
-            // Save tail of trace to keep checkpoint files manageable, or all if final
-            // Typically saving last 1000 samples is enough for inspection unless final
-            size_t start = final ? 0 : (res.samples.size() > 1000 ? res.samples.size() - 1000 : 0);
-            
-            for(size_t i = start; i < res.samples.size(); ++i) {
-                file << i << "," << res.sampleObjectiveValues[i];
-                for(int j=0; j<res.samples[i].size(); ++j) file << "," << res.samples[i][j];
+            // For checkpoint: save last 5000 samples; for final: save everything
+            size_t start_idx = final ? 0 : (res.samples.size() > 5000 ? res.samples.size() - 5000 : 0);
+
+            for (size_t i = start_idx; i < res.samples.size(); ++i) {
+                file << i << "," << std::scientific << std::setprecision(6) << res.sampleObjectiveValues[i];
+                for (int j = 0; j < res.samples[i].size(); ++j) {
+                    file << "," << res.samples[i][j];
+                }
                 file << "\n";
             }
         }
+        if (final) logger.info(LOG_SOURCE, "Full posterior trace saved to: " + path);
     }
 
 } // namespace epidemic

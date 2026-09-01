@@ -2,46 +2,63 @@
 #include "exceptions/Exceptions.hpp"
 #include "model/ModelConstants.hpp"
 #include <stdexcept>
-#include "utils/Logger.hpp"
-#include <iostream>
+#include <cmath>
+#include <algorithm>
 #include "model/PieceWiseConstantNPIStrategy.hpp"
 
-// OpenMP header for SIMD
 #if defined(_OPENMP)
 #include <omp.h>
+#endif
+
+#if defined(_MSC_VER)
+    #define RESTRICT __restrict
+#elif defined(__GNUC__) || defined(__clang__)
+    #define RESTRICT __restrict__
+#else
+    #define RESTRICT
 #endif
 
 namespace epidemic {
 
     AgeSEPAIHRDModel::AgeSEPAIHRDModel(const SEPAIHRDParameters& params, std::shared_ptr<INpiStrategy> npi_strategy_ptr)
-        : num_age_classes(params.N.size()), N(params.N), M_baseline(params.M_baseline),
-          beta(params.beta), beta_end_times_(params.beta_end_times), beta_values_(params.beta_values), a(params.a), h_infec(params.h_infec), theta(params.theta),
+        : num_age_classes(static_cast<int>(params.N.size())), 
+          N(params.N), 
+          M_baseline(params.M_baseline),
+          beta(params.beta), beta_end_times_(params.beta_end_times), beta_values_(params.beta_values), 
+          a(params.a), h_infec(params.h_infec), theta(params.theta),
           sigma(params.sigma), gamma_p(params.gamma_p), gamma_A(params.gamma_A), gamma_I(params.gamma_I),
-          gamma_H(params.gamma_H), gamma_ICU(params.gamma_ICU), p(params.p), h(params.h), icu(params.icu),
-          d_H(params.d_H), d_ICU(params.d_ICU), d_community(params.d_community.size() > 0 ? params.d_community : Eigen::VectorXd::Zero(params.N.size())),
-          npi_strategy(npi_strategy_ptr), baseline_beta(params.beta), baseline_theta(params.theta),
+          gamma_H(params.gamma_H), gamma_ICU(params.gamma_ICU), 
+          p(params.p), h(params.h), icu(params.icu),
+          d_H(params.d_H), d_ICU(params.d_ICU), 
+          d_community(params.d_community.size() > 0 ? params.d_community : Eigen::VectorXd::Zero(params.N.size())),
+          npi_strategy(std::move(npi_strategy_ptr)), 
+          baseline_beta(params.beta), baseline_theta(params.theta),
           E0_multiplier(params.E0_multiplier), P0_multiplier(params.P0_multiplier),
           A0_multiplier(params.A0_multiplier), I0_multiplier(params.I0_multiplier),
           H0_multiplier(params.H0_multiplier), ICU0_multiplier(params.ICU0_multiplier),
           R0_multiplier(params.R0_multiplier), D0_multiplier(params.D0_multiplier),
-          runup_days(params.runup_days), seed_exposed(params.seed_exposed) {
-    
+          runup_days(params.runup_days), seed_exposed(params.seed_exposed) 
+    {
         if (!params.validate()) THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor", "Invalid SEPAIHRD parameters.");
         if (!npi_strategy) THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor", "NPI strategy pointer cannot be null.");
-        
-        if (!beta_values_.empty()) {
-            double beta_baseline_end_time = 0.0;
-            auto* piecewise_npi_strategy = dynamic_cast<PiecewiseConstantNpiStrategy*>(npi_strategy.get());
-            if (piecewise_npi_strategy && !beta_end_times_.empty()) {
-                beta_baseline_end_time = beta_end_times_.front();
-            }
 
+        // Precompute 1/N to replace division with multiplication in hot path
+        inv_N.resize(num_age_classes);
+        for(int i = 0; i < num_age_classes; ++i) {
+             inv_N[i] = (N[i] > constants::MIN_POPULATION_FOR_DIVISION) ? (1.0 / N[i]) : 0.0;
+        }
+
+        if (!beta_end_times_.empty() || !beta_values_.empty()) {
+            if (beta_end_times_.size() != beta_values_.size() || beta_end_times_.empty()) {
+                THROW_INVALID_PARAM("AgeSEPAIHRDModel::constructor",
+                                    "beta_end_times and beta_values must be provided with matching non-zero sizes when using a beta schedule.");
+            }
             beta_strategy_ = std::make_unique<PiecewiseConstantParameterStrategy>(
                 "beta",
                 std::vector<double>(beta_end_times_.begin() + 1, beta_end_times_.end()),
                 std::vector<double>(beta_values_.begin() + 1, beta_values_.end()),
                 beta_values_.front(),
-                beta_baseline_end_time
+                beta_end_times_.front()
             );
         }
         resizeWorkingVectors();
@@ -49,7 +66,7 @@ namespace epidemic {
     
     AgeSEPAIHRDModel::AgeSEPAIHRDModel(const AgeSEPAIHRDModel& other)
         : EpidemicModel(other),
-          num_age_classes(other.num_age_classes), N(other.N), M_baseline(other.M_baseline),
+          num_age_classes(other.num_age_classes), N(other.N), inv_N(other.inv_N), M_baseline(other.M_baseline),
           beta(other.beta), beta_end_times_(other.beta_end_times_), beta_values_(other.beta_values_),
           a(other.a), h_infec(other.h_infec), theta(other.theta), sigma(other.sigma),
           gamma_p(other.gamma_p), gamma_A(other.gamma_A), gamma_I(other.gamma_I),
@@ -72,83 +89,100 @@ namespace epidemic {
     }
 
     void AgeSEPAIHRDModel::resizeWorkingVectors() {
-        cached_infectious_pressure.resize(num_age_classes);
-        cached_lambda.resize(num_age_classes);
+        // Single contiguous block improves cache locality
+        size_t needed_size = static_cast<size_t>(2 * num_age_classes);
+        if (workspace_.size() < needed_size) {
+            workspace_.resize(needed_size);
+        }
+        cached_inf_pressure_ptr_ = workspace_.data();
+        cached_lambda_ptr_ = workspace_.data() + num_age_classes;
     }
 
-    // *** SIMD OPTIMIZED COMPUTE DERIVATIVES ***
     void AgeSEPAIHRDModel::computeDerivatives(const std::vector<double>& state,
                                              std::vector<double>& derivatives,
                                              double time) {
         const int n = num_age_classes;
+        const int expected_size = constants::NUM_COMPARTMENTS_SEPAIHRD * n;
         
-        // --- 1. RAW POINTER ACCESS FOR VECTORIZATION ---
-        // Explicitly mapping raw pointers to avoid Eigen's expression template overhead in the hot loop
-        const double* __restrict__ S_ptr   = &state[0 * n];
-        const double* __restrict__ E_ptr   = &state[1 * n];
-        const double* __restrict__ P_ptr   = &state[2 * n];
-        const double* __restrict__ A_ptr   = &state[3 * n];
-        const double* __restrict__ I_ptr   = &state[4 * n];
-        const double* __restrict__ H_ptr   = &state[5 * n];
-        const double* __restrict__ ICU_ptr = &state[6 * n];
+        if (static_cast<int>(state.size()) < expected_size) {
+            THROW_INVALID_PARAM("computeDerivatives", "State vector too small.");
+        }
+        
+        if (static_cast<int>(derivatives.size()) != expected_size) {
+            derivatives.resize(expected_size);
+        }
 
-        double* __restrict__ dS_ptr   = &derivatives[0 * n];
-        double* __restrict__ dE_ptr   = &derivatives[1 * n];
-        double* __restrict__ dP_ptr   = &derivatives[2 * n];
-        double* __restrict__ dA_ptr   = &derivatives[3 * n];
-        double* __restrict__ dI_ptr   = &derivatives[4 * n];
-        double* __restrict__ dH_ptr   = &derivatives[5 * n];
-        double* __restrict__ dICU_ptr = &derivatives[6 * n];
-        double* __restrict__ dR_ptr   = &derivatives[7 * n];
-        double* __restrict__ dD_ptr   = &derivatives[8 * n];
-        double* __restrict__ dCumH_ptr   = &derivatives[9 * n];
-        double* __restrict__ dCumICU_ptr = &derivatives[10 * n];
+        // Raw pointers with RESTRICT for SIMD optimization (SoA layout)
+        const double* RESTRICT S_ptr   = &state[0 * n];
+        const double* RESTRICT E_ptr   = &state[1 * n];
+        const double* RESTRICT P_ptr   = &state[2 * n];
+        const double* RESTRICT A_ptr   = &state[3 * n];
+        const double* RESTRICT I_ptr   = &state[4 * n];
+        const double* RESTRICT H_ptr   = &state[5 * n];
+        const double* RESTRICT ICU_ptr = &state[6 * n];
 
-        // Constant parameters pointers
-        const double* __restrict__ N_ptr = N.data();
-        const double* __restrict__ h_infec_ptr = h_infec.data();
-        const double* __restrict__ p_ptr = p.data();
-        const double* __restrict__ h_ptr = h.data();
-        const double* __restrict__ icu_ptr = icu.data();
-        const double* __restrict__ dH_ptr_const = d_H.data();
-        const double* __restrict__ dICU_ptr_const = d_ICU.data();
-        const double* __restrict__ d_comm_ptr = d_community.data();
+        double* RESTRICT dS_ptr   = &derivatives[0 * n];
+        double* RESTRICT dE_ptr   = &derivatives[1 * n];
+        double* RESTRICT dP_ptr   = &derivatives[2 * n];
+        double* RESTRICT dA_ptr   = &derivatives[3 * n];
+        double* RESTRICT dI_ptr   = &derivatives[4 * n];
+        double* RESTRICT dH_ptr   = &derivatives[5 * n];
+        double* RESTRICT dICU_ptr = &derivatives[6 * n];
+        double* RESTRICT dR_ptr   = &derivatives[7 * n];
+        double* RESTRICT dD_ptr   = &derivatives[8 * n];
+        double* RESTRICT dCumH_ptr   = &derivatives[9 * n];
+        double* RESTRICT dCumICU_ptr = &derivatives[10 * n];
 
-        // --- 2. CALCULATE INFECTIOUS PRESSURE ---
-        double* __restrict__ inf_pressure_ptr = cached_infectious_pressure.data();
+        const double* RESTRICT inv_N_ptr = inv_N.data();
+        const double* RESTRICT h_infec_ptr = h_infec.data();
+        const double* RESTRICT p_ptr = p.data();
+        const double* RESTRICT h_ptr = h.data();
+        const double* RESTRICT icu_ptr = icu.data();
+        const double* RESTRICT dH_ptr_const = d_H.data();
+        const double* RESTRICT dICU_ptr_const = d_ICU.data();
+        const double* RESTRICT d_comm_ptr = d_community.data();
+        const double* RESTRICT a_ptr = a.data();
+        const double* RESTRICT M_ptr = M_baseline.data();
+
+        double* RESTRICT inf_pressure_ptr = cached_inf_pressure_ptr_;
+        double* RESTRICT lambda_ptr = cached_lambda_ptr_;
+
         const double local_theta = theta;
-        const double min_pop = constants::MIN_POPULATION_FOR_DIVISION;
 
-        // Auto-vectorizable loop
+        // Infectious pressure: multiply by precomputed 1/N instead of division
         #pragma omp simd
         for (int i = 0; i < n; ++i) {
             double total_inf = P_ptr[i] + A_ptr[i] + local_theta * I_ptr[i];
-            inf_pressure_ptr[i] = (N_ptr[i] > min_pop) 
-                ? (h_infec_ptr[i] * total_inf / N_ptr[i]) 
-                : 0.0;
+            inf_pressure_ptr[i] = total_inf * h_infec_ptr[i] * inv_N_ptr[i];
         }
 
-        // --- 3. CONTACT MATRIX & LAMBDA ---
+        // Force of infection: lambda = Beta * a .* (M * inf_pressure)
+        // Column-major traversal for cache-friendly access
+        #pragma omp simd
+        for (int i = 0; i < n; ++i) {
+            lambda_ptr[i] = 0.0;
+        }
+
+        for (int j = 0; j < n; ++j) {
+            const double inf_j = inf_pressure_ptr[j];
+            const double* RESTRICT M_col_ptr = &M_ptr[j * n];
+            
+            #pragma omp simd
+            for (int i = 0; i < n; ++i) {
+                lambda_ptr[i] += M_col_ptr[i] * inf_j;
+            }
+        }
+
         double current_beta = computeBeta(time);
-        double reduction_factor = npi_strategy->getReductionFactor(time);
+        double reduction_factor = npi_strategy->getReductionFactor(time); 
         double beta_eff = current_beta * reduction_factor;
 
-        // Matrix-Vector multiplication: Lambda = beta_eff * a * (M * inf_pressure)
-        // M_baseline is MatrixXd (column-major). Standard loop order for cache friendly access:
-        // Result[i] += M[i][j] * Vec[j]. Since M is ColMajor, we iterate cols then rows or rely on Eigen.
-        // For small N, Eigen is fast. For explicit SIMD, we can assume small N and just do:
-        // Using Eigen here because matrix-vector is highly optimized in Eigen AVX.
-        // We just map the input/output pointers.
-        
-        Eigen::Map<Eigen::VectorXd> lambda_map(cached_lambda.data(), n);
-        Eigen::Map<const Eigen::VectorXd> inf_press_map(cached_infectious_pressure.data(), n);
-        
-        // The contact matrix multiplication is the O(N^2) part.
-        // M_baseline is typically small (e.g. 9x9 or 16x16).
-        lambda_map = beta_eff * a.array() * (M_baseline * inf_press_map).array();
+        #pragma omp simd
+        for (int i = 0; i < n; ++i) {
+            lambda_ptr[i] *= beta_eff * a_ptr[i];
+        }
 
-        // --- 4. COMPUTE COMPARTMENT DERIVATIVES (SIMD) ---
-        const double* __restrict__ lambda_ptr = cached_lambda.data();
+        // Local copies for register allocation
         const double local_sigma = sigma;
         const double local_gamma_p = gamma_p;
         const double local_gamma_A = gamma_A;
@@ -156,25 +190,25 @@ namespace epidemic {
         const double local_gamma_H = gamma_H;
         const double local_gamma_ICU = gamma_ICU;
 
+        // Compute all compartment derivatives in a single vectorized loop
         #pragma omp simd
         for (int i = 0; i < n; ++i) {
-            double lambda_val = (lambda_ptr[i] > 0.0) ? lambda_ptr[i] : 0.0;
+            double lambda_val = std::max(0.0, lambda_ptr[i]);
+            
             double flow_SE = lambda_val * S_ptr[i];
             double flow_EP = local_sigma * E_ptr[i];
             double flow_P_out = local_gamma_p * P_ptr[i];
+            
             double flow_PA = p_ptr[i] * flow_P_out;
-            double flow_PI = (1.0 - p_ptr[i]) * flow_P_out;
+            double flow_PI = flow_P_out - flow_PA;
             
-            // Nursing home bypass: add d_community outflow from I
-            double I_out = (local_gamma_I + h_ptr[i] + d_comm_ptr[i]) * I_ptr[i];
             double flow_IH = h_ptr[i] * I_ptr[i];
-            double flow_IR = local_gamma_I * I_ptr[i]; 
-            double flow_ID_community = d_comm_ptr[i] * I_ptr[i];  // Direct I->D (nursing home deaths)
-            // Original: cached_dI = ... - (gamma_I + h) * I
-            // Original R: gamma_A*A + gamma_I*I + ...
-            
+            double flow_IR = local_gamma_I * I_ptr[i];
+            double flow_ID_community = d_comm_ptr[i] * I_ptr[i];
+            double I_out = flow_IR + flow_IH + flow_ID_community;
+
             double flow_H_ICU = icu_ptr[i] * H_ptr[i];
-            double H_out = (local_gamma_H + dH_ptr_const[i] + icu_ptr[i]) * H_ptr[i];
+            double H_out = local_gamma_H * H_ptr[i] + dH_ptr_const[i] * H_ptr[i] + flow_H_ICU;
             double ICU_out = (local_gamma_ICU + dICU_ptr_const[i]) * ICU_ptr[i];
 
             dS_ptr[i]   = -flow_SE;
@@ -186,7 +220,6 @@ namespace epidemic {
             dICU_ptr[i] = flow_H_ICU - ICU_out;
             
             dR_ptr[i]   = local_gamma_A * A_ptr[i] + flow_IR + local_gamma_H * H_ptr[i] + local_gamma_ICU * ICU_ptr[i];
-            // Add nursing home bypass deaths to dD
             dD_ptr[i]   = dH_ptr_const[i] * H_ptr[i] + dICU_ptr_const[i] * ICU_ptr[i] + flow_ID_community;
             
             dCumH_ptr[i]   = flow_IH;
@@ -198,11 +231,12 @@ namespace epidemic {
         (void)time;
         if (name == "mask_mandate" || name == "transmission_reduction") {
              if (params.size() != 1) THROW_INVALID_PARAM("applyIntervention", name + " requires 1 parameter.");
-             beta = baseline_beta * (1.0 - params(0));
-             beta_strategy_.reset(); 
+             double frac = std::clamp(params(0), 0.0, 1.0);
+             setTransmissionRate(baseline_beta * (1.0 - frac));
         } else if (name == "symptomatic_isolation") {
              if (params.size() != 1) THROW_INVALID_PARAM("applyIntervention", "Symptomatic isolation requires 1 parameter.");
-             theta = baseline_theta * params(0);
+             double frac = std::clamp(params(0), 0.0, 1.0);
+             setReducedTransmissibility(baseline_theta * frac);
         }
     }
     
@@ -216,7 +250,8 @@ namespace epidemic {
     
     std::vector<std::string> AgeSEPAIHRDModel::getStateNames() const {        
         std::vector<std::string> names;
-        std::vector<std::string> compartments = {"S", "E", "P", "A", "I", "H", "ICU", "R", "D", "CumH", "CumICU"};
+        names.reserve(constants::NUM_COMPARTMENTS_SEPAIHRD * num_age_classes);
+        static const std::vector<std::string> compartments = {"S", "E", "P", "A", "I", "H", "ICU", "R", "D", "CumH", "CumICU"};
         for (const auto& comp : compartments) {
             for (int i = 0; i < num_age_classes; ++i) names.push_back(comp + std::to_string(i));
         }
@@ -275,7 +310,6 @@ namespace epidemic {
         p_struct.R0_multiplier = R0_multiplier;
         p_struct.D0_multiplier = D0_multiplier;
         
-        // Run-up strategy parameters
         p_struct.runup_days = runup_days;
         p_struct.seed_exposed = seed_exposed;
 
@@ -289,8 +323,17 @@ namespace epidemic {
     }
 
     void AgeSEPAIHRDModel::setModelParameters(const SEPAIHRDParameters& params) {
-        if (params.N.size() != num_age_classes) THROW_INVALID_PARAM("setModelParameters", "Size mismatch.");
-        N = params.N; M_baseline = params.M_baseline; a = params.a; h_infec = params.h_infec;
+        if (static_cast<int>(params.N.size()) != num_age_classes) 
+            THROW_INVALID_PARAM("setModelParameters", "Size mismatch.");
+        
+        N = params.N; 
+        
+        // Update precomputed inverses
+        for(int i = 0; i < num_age_classes; ++i) {
+             inv_N[i] = (N[i] > constants::MIN_POPULATION_FOR_DIVISION) ? (1.0 / N[i]) : 0.0;
+        }
+
+        M_baseline = params.M_baseline; a = params.a; h_infec = params.h_infec;
         beta = params.beta; theta = params.theta; sigma = params.sigma;
         gamma_p = params.gamma_p; gamma_A = params.gamma_A; gamma_I = params.gamma_I;
         gamma_H = params.gamma_H; gamma_ICU = params.gamma_ICU;
@@ -306,7 +349,8 @@ namespace epidemic {
         baseline_beta = params.beta; baseline_theta = params.theta;
         beta_end_times_ = params.beta_end_times; beta_values_ = params.beta_values;
 
-        if (!beta_values_.empty()) {
+        if (!beta_values_.empty() && !beta_end_times_.empty() && 
+            beta_values_.size() == beta_end_times_.size()) {
              double beta_baseline_end_time = beta_end_times_.front();
              double beta_baseline_value = beta_values_.front();
              beta_strategy_ = std::make_unique<PiecewiseConstantParameterStrategy>(

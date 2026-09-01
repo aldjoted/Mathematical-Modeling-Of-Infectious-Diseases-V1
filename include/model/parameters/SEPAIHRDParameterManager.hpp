@@ -14,6 +14,17 @@
 namespace epidemic {
 
 /**
+ * @brief Constraint handling mode for parameter bounding
+ * 
+ * OPTIMIZATION_CLAMP: Clamps values at boundaries (good for hill climbing - stick to walls)
+ * MCMC_REFLECT: Reflects values off boundaries (preserves detailed balance for MCMC)
+ */
+enum class ConstraintMode {
+    OPTIMIZATION_CLAMP,  ///< Clamping mode for optimization (Hill Climbing/PSO)
+    MCMC_REFLECT         ///< Reflection mode for MCMC sampling
+};
+
+/**
  * @brief Manages parameters (beta, theta,..., potentially NPI) for the AgeSEPAIHRDModel during calibration.
  */
 class SEPAIHRDParameterManager : public IParameterManager {
@@ -108,10 +119,23 @@ public:
      */
     const std::map<std::string, std::pair<double, double>>& getParamBounds() const { return param_bounds_; }
 
+    /**
+     * @brief Set the constraint mode (clamping for optimization, reflection for MCMC).
+     * @param mode The constraint mode to use.
+     */
+    void setConstraintMode(ConstraintMode mode) { mode_ = mode; }
+
+    /**
+     * @brief Get the current constraint mode.
+     * @return The current constraint mode.
+     */
+    ConstraintMode getConstraintMode() const { return mode_; }
 
 private:
     /** @brief Shared pointer to the AgeSEPAIHRDModel instance being managed. */
     std::shared_ptr<AgeSEPAIHRDModel> model_;
+    /** @brief Constraint handling mode (clamping for optimization, reflection for MCMC). */
+    ConstraintMode mode_ = ConstraintMode::OPTIMIZATION_CLAMP;
     /** @brief Ordered list of parameter names that this manager handles. */
     std::vector<std::string> param_names_;
     /** @brief Map of parameter names to their proposal standard deviations for MCMC or optimization. */

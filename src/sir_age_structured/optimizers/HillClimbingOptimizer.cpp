@@ -44,9 +44,9 @@ namespace epidemic {
     {
         // Tuning constants
         const double shrinkage = 0.5;
-        const double growth = 1.5;
+        const double growth = 2.0;        // Patch E: More aggressive expansion
         const int max_backtrack = 10;
-        const int max_expansion = 10;
+        const int max_expansion = 12;     // Patch E: More expansion steps
         
         // --- Phase 1: Find ANY Valid Improvement (Backtracking) ---
         double step = 1.0;
@@ -184,12 +184,16 @@ namespace epidemic {
             thread_norms[t] = std::normal_distribution<double>(0.0, 1.0);
         }
 
+        // Reuse buffers across iterations to avoid repeated allocations.
+        std::vector<Eigen::VectorXd> candidates(num_candidates, Eigen::VectorXd(n_params));
+        std::vector<Eigen::VectorXd> constrained_candidates(num_candidates, Eigen::VectorXd(n_params));
+        std::vector<double> scores(num_candidates, -1e18);
+
         for (int iter = 0; iter < iterations_; ++iter) {
             
             // A. Generate Candidate Cloud (Parallel)
             // Mix of Global Correlated moves (using L) and Local Axis-Aligned moves
-            std::vector<Eigen::VectorXd> candidates(num_candidates);
-            std::vector<double> scores(num_candidates, -1e18);
+            // (candidates/scores reused)
 
             #pragma omp parallel for num_threads(available_threads) schedule(static)
             for(int i=0; i<num_candidates; ++i) {
@@ -218,10 +222,14 @@ namespace epidemic {
 
             // B. Parallel Evaluation
             // Distribute the costly objective function calls across cores
+            // Patch A: Store constrained points to get the TRUE direction after projection
+            // (constrained_candidates reused)
+            
             #pragma omp parallel for num_threads(available_threads) schedule(dynamic)
             for(int i=0; i<num_candidates; ++i) {
                 // Candidate vector represents the *step*, so add to current
                 Eigen::VectorXd p_test = parameterManager.applyConstraints(current_params + candidates[i]);
+                constrained_candidates[i] = p_test;  // Patch A: Store constrained point
                 scores[i] = safe_evaluate(objectiveFunction, p_test);
             }
 
@@ -235,15 +243,27 @@ namespace epidemic {
                 }
             }
 
-            // D. Robust Line Search
-            // If we found a valid candidate, try to exploit that direction
-            // Even if the cloud didn't improve, we try line search with backtracking
-            // because a smaller step might work (Phase 1 Backtracking).
+            // D. Early Accept + Robust Line Search
             bool moved = false;
             if (best_idx != -1 && best_val > -1e18) {
-                moved = performRobustLineSearch(
-                    current_params, current_logL, candidates[best_idx], objectiveFunction, parameterManager
+                // Patch A: Compute the TRUE constrained direction (handles boundary projection)
+                Eigen::VectorXd best_constrained_point = constrained_candidates[best_idx];
+                Eigen::VectorXd constrained_direction = best_constrained_point - current_params;
+                
+                // Patch B: Early accept - if cloud found improvement, take it NOW
+                // This ensures we never lose a good point even if line search fails
+                if (best_val > current_logL) {
+                    current_params = best_constrained_point;
+                    current_logL = best_val;
+                    moved = true;
+                }
+                
+                // Try to exploit the constrained direction further via line search
+                // Patch A: Pass constrained_direction instead of raw candidates[best_idx]
+                bool line_search_improved = performRobustLineSearch(
+                    current_params, current_logL, constrained_direction, objectiveFunction, parameterManager
                 );
+                moved = moved || line_search_improved;
             }
 
             // E. Update & Adaptation
@@ -259,9 +279,17 @@ namespace epidemic {
                 double step_norm = actual_step.squaredNorm();
                 
                 if (step_norm > 1e-14) {
-                    double alpha = 0.1; // Learning rate
+                    // Patch D: Adaptive alpha (CMA-ES style) - scales with dimension
+                    double alpha = 2.0 / (n_params + 2.0);
                     cov *= (1.0 - alpha);
                     cov += alpha * (actual_step * actual_step.transpose());
+                    
+                    // Patch C: Force symmetry (floating point noise can break it)
+                    cov = 0.5 * (cov + cov.transpose());
+                    
+                    // Patch C: Systematic jitter for numerical stability
+                    double jitter = 1e-8 * cov.trace() / n_params;
+                    cov += jitter * Eigen::MatrixXd::Identity(n_params, n_params);
                     
                     // Enforce minimum diagonal floor to prevent covariance collapse
                     // This ensures a minimum exploration capability even when stuck

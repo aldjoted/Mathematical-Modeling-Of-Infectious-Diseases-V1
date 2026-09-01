@@ -2,14 +2,21 @@ build/
 data/calibration/
 data/calibration_output/
 data/visualization/
-data/output
+
+# Ignore all generated outputs, but keep the post-calibration report folder tracked.
+data/output/*
+!data/output/PostCalibrationFigures/
+!data/output/PostCalibrationFigures/**
 data/visualizations/
 data/mcmc_samples/
 scripts/model/data/
 docs/abstracts/
 data/checkpoints/
-docs/*
+docs/abstractions/*
+docs/exceptions/*
 scripts/DataVisualization/__pycache__/
 scripts/data-processing/__pycache__/
 scripts/model/__pycache__/
 scripts/utils/__pycache__/
+.gitignore
+.github/

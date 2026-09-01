@@ -99,12 +99,6 @@ std::map<std::string, AggregatedStats> ResultAggregator::aggregateAllBatches(
         return {};
     }
     
-    // FIX: Use weighted pooled estimation across batches
-    // For proper statistical aggregation, we compute:
-    // - Pooled mean: weighted average of batch means (weights = batch sample counts)
-    // - Pooled variance: using combined variance formula
-    // - Pooled quantiles: using weighted interpolation of batch quantiles
-    
     // For each metric, aggregate across batches
     for (const auto& [metric_name, _] : all_batch_stats[0]) {
         // Collect all batch statistics for this metric
@@ -128,12 +122,11 @@ std::map<std::string, AggregatedStats> ResultAggregator::aggregateAllBatches(
         AggregatedStats final_stats;
         
         if (!batch_means.empty()) {
-            // Compute pooled mean (assuming equal batch sizes)
+            // Pooled mean (assuming equal batch sizes)
             double pooled_mean = std::accumulate(batch_means.begin(), batch_means.end(), 0.0) / batch_means.size();
             final_stats["mean"] = pooled_mean;
             
-            // Compute pooled variance using combined variance formula:
-            // For equal-sized batches: pooled_var = mean(batch_vars) + var(batch_means)
+            // Pooled variance: mean(batch_vars) + var(batch_means)
             if (!batch_std_devs.empty()) {
                 double mean_of_vars = 0.0;
                 for (double sd : batch_std_devs) {
@@ -151,8 +144,7 @@ std::map<std::string, AggregatedStats> ResultAggregator::aggregateAllBatches(
                 final_stats["std_dev"] = std::sqrt(pooled_variance);
             }
             
-            // FIX: For median and quantiles, use the median of batch medians
-            // This is more robust than mean of medians for skewed distributions
+            // Median of batch medians (more robust for skewed distributions)
             if (!batch_medians.empty()) {
                 std::vector<double> sorted_medians = batch_medians;
                 std::sort(sorted_medians.begin(), sorted_medians.end());
@@ -164,8 +156,7 @@ std::map<std::string, AggregatedStats> ResultAggregator::aggregateAllBatches(
                 }
             }
             
-            // For quantiles: use min of lower quantiles and max of upper quantiles
-            // This gives conservative credible intervals
+            // Conservative credible intervals: min of lower, max of upper
             if (!batch_q025.empty()) {
                 final_stats["q025"] = *std::min_element(batch_q025.begin(), batch_q025.end());
             }
@@ -255,7 +246,7 @@ PosteriorPredictiveData ResultAggregator::aggregatePosteriorPredictives(
         std::vector<PPDQuantileAccumulatorType>(A, 
             PPDQuantileAccumulatorType(ba::extended_p_square_probabilities = ppd_probs)));
     
-    // FIX Bug 8: Use provided seed for reproducibility, or random_device if seed is 0
+    // Use provided seed for reproducibility, or random_device if seed is 0
     std::mt19937 gen;
     if (random_seed != 0) {
         gen.seed(random_seed);

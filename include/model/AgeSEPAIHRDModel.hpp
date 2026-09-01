@@ -8,26 +8,39 @@
 #include <Eigen/Dense>
 #include <vector>
 #include <string>
-#include <mutex>
 #include <memory>
+#include <algorithm>
 
 namespace epidemic {
 
     /**
-     * @brief Age-structured SEPAIHRD epidemic model with heterogeneous susceptibility and infectiousness.
-     * * Implements a COVID-19 like model with age structure for:
+     * @brief High-Performance Age-structured SEPAIHRD epidemic model.
+     * 
+     * Implements a COVID-19 like model with age structure for:
      * Susceptible (S), Exposed (E), Presymptomatic (P), Asymptomatic (A),
      * Symptomatic (I), Hospitalized (H), intensive care unit (ICU), Recovered (R), and Deceased (D).
      * Transmission is governed by a global rate beta, an age-specific susceptibility vector a,
      * and an age-specific infectiousness vector h_infec.
+     * 
+     * Optimization Notes:
+     * - Uses a single contiguous memory block for scratch space (cache locality).
+     * - Precomputes reciprocals for division-free hot paths.
+     * - final specifier to enable devirtualization.
      */
-    class AgeSEPAIHRDModel : public EpidemicModel {
-        private:
+    class AgeSEPAIHRDModel final : public EpidemicModel {
+    public:
+        using VectorRef = Eigen::Ref<Eigen::VectorXd>;
+        using ConstVectorRef = Eigen::Ref<const Eigen::VectorXd>;
+    private:
         /** @brief Number of age classes */
         int num_age_classes;
         
+        // Model Parameters (SoA Layout for SIMD efficiency)
         /** @brief Population sizes for each age class */
         Eigen::VectorXd N;
+        
+        /** @brief Optimization: Precomputed 1.0 / N[i] to turn division into multiplication */
+        Eigen::VectorXd inv_N;
         
         /** @brief Baseline contact matrix between age classes */
         Eigen::MatrixXd M_baseline;
@@ -97,22 +110,17 @@ namespace epidemic {
         
         /** @brief Original reduced transmissibility before interventions */
         double baseline_theta;
-    
-        // REMOVED: mutable std::mutex mutex_; 
 
-        // Keep cached working vectors (They are now safe because they are thread-local per clone)
-        mutable Eigen::VectorXd cached_infectious_pressure;
-        mutable Eigen::VectorXd cached_infectious_total;
-        mutable Eigen::VectorXd cached_lambda;
-        mutable Eigen::VectorXd cached_dS;
-        mutable Eigen::VectorXd cached_dE;
-        mutable Eigen::VectorXd cached_dP;
-        mutable Eigen::VectorXd cached_dA;
-        mutable Eigen::VectorXd cached_dI;
-        mutable Eigen::VectorXd cached_dH;
-        mutable Eigen::VectorXd cached_dICU;
-        mutable Eigen::VectorXd cached_dR;
-        mutable Eigen::VectorXd cached_dD;
+        /**
+         * @brief Optimization: Single contiguous workspace for all intermediate calculations.
+         * Layout: [inf_pressure | lambda]
+         * This avoids multiple small allocations and keeps hot data spatially local.
+         */
+        mutable std::vector<double> workspace_;
+        
+        /** @brief Pointers into the contiguous workspace (Zero-cost abstraction) */
+        mutable double* cached_inf_pressure_ptr_ = nullptr;
+        mutable double* cached_lambda_ptr_ = nullptr;
 
         /**
          * @brief Resizes the working vectors to match the number of age classes.
@@ -136,20 +144,6 @@ namespace epidemic {
         double seed_exposed = 10.0;
 
         // --- Private helper methods ---
-        /**
-         * @brief Computes the current kappa value based on the NPI strategy and time.
-         * @param time Current simulation time
-         * @return Current kappa value
-         */
-        double computeKappa(double time) const;
-
-        /**
-         * @brief Computes the current contact matrix scaled by kappa.
-         * @param time Current simulation time
-         * @return Scaled contact matrix
-         */
-        Eigen::MatrixXd computeContactMatrix(double time) const;
-    
     public:
 
         /**
@@ -175,10 +169,11 @@ namespace epidemic {
         /**
          * @brief Clone method for Prototype Pattern
          */
-        virtual std::shared_ptr<AgeSEPAIHRDModel> clone() const;
+        std::shared_ptr<AgeSEPAIHRDModel> clone() const;
 
         /**
-         * @brief Computes the derivatives of the state variables using the appropriate kappa.
+         * @brief Hot path derivative computation.
+         * Marked 'final' (via class) to allow compiler devirtualization.
          * @param state Current state variables
          * @param derivatives Computed derivatives of the state variables
          * @param time Current time
@@ -343,9 +338,21 @@ namespace epidemic {
          * @return true if initial deaths are considered zero, false otherwise.
          */
         bool areInitialDeathsZero() const;
-    
+
+        // --- Inline accessors for performance (noexcept for optimizer hints) ---
+        [[nodiscard]] double getRunupDays() const noexcept { return runup_days; }
+        [[nodiscard]] double getSeedExposed() const noexcept { return seed_exposed; }
+
+        [[nodiscard]] double getE0Multiplier() const noexcept { return E0_multiplier; }
+        [[nodiscard]] double getP0Multiplier() const noexcept { return P0_multiplier; }
+        [[nodiscard]] double getA0Multiplier() const noexcept { return A0_multiplier; }
+        [[nodiscard]] double getI0Multiplier() const noexcept { return I0_multiplier; }
+        [[nodiscard]] double getH0Multiplier() const noexcept { return H0_multiplier; }
+        [[nodiscard]] double getICU0Multiplier() const noexcept { return ICU0_multiplier; }
+        [[nodiscard]] double getR0Multiplier() const noexcept { return R0_multiplier; }
+        [[nodiscard]] double getD0Multiplier() const noexcept { return D0_multiplier; }
     };
     
-    }
+} // namespace epidemic
 
 #endif // AGE_SEPAIHRD_MODEL_H

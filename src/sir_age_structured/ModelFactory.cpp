@@ -52,11 +52,10 @@ namespace epidemic {
                  (params.d_H.array() < 0).any() || (params.d_ICU.array() < 0).any()) {
                  throw ModelConstructionException("ModelFactory::createAgeSEPAIHRDModel", "Negative values found in vector parameters (p, h, icu, d_H, d_ICU).");
              }
-             if ((params.p.array() < 0).any() || (params.p.array() > 1).any() ||
-                 (params.h.array() < 0).any() || (params.h.array() > 1).any() ||
-                 (params.icu.array() < 0).any() || (params.icu.array() > 1).any()) {
-                  throw ModelConstructionException("ModelFactory::createAgeSEPAIHRDModel", "Fraction parameters (p, h, icu) must be between 0 and 1.");
-             }
+               // p is a fraction; h and icu are modeled as transition rates (hazards) in AgeSEPAIHRDModel.
+               if ((params.p.array() < 0).any() || (params.p.array() > 1).any()) {
+                   throw ModelConstructionException("ModelFactory::createAgeSEPAIHRDModel", "Fraction parameter p must be between 0 and 1.");
+               }
     
             return std::make_shared<AgeSEPAIHRDModel>(params, npi_strategy_ptr);
         } catch (const ModelConstructionException& e) {
@@ -110,8 +109,13 @@ namespace epidemic {
             THROW_INVALID_PARAM("ModelFactory::createInitialSEPAIHRDState", "Initial state components cannot be negative.");
         }
     
-        Eigen::VectorXd initial_state(9 * n);
-        initial_state << S0, E0, P0, A0, I0, H0, ICU0, R0, D0;
+        // Model state layout includes cumulative tracking compartments CumH and CumICU.
+        // Initialize them to 0 by default here (callers can override if needed).
+        Eigen::VectorXd CumH0 = Eigen::VectorXd::Zero(n);
+        Eigen::VectorXd CumICU0 = Eigen::VectorXd::Zero(n);
+
+        Eigen::VectorXd initial_state(11 * n);
+        initial_state << S0, E0, P0, A0, I0, H0, ICU0, R0, D0, CumH0, CumICU0;
         return initial_state;
     }
     

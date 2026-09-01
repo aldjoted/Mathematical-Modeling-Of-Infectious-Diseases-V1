@@ -3,6 +3,7 @@
 
 #include <Eigen/Dense>
 #include <vector>
+#include <algorithm>
 
 /**
  * @namespace epidemic
@@ -143,9 +144,28 @@ struct SEPAIHRDParameters {
             return false;
         }
 
+        // Beta schedule (if provided) must be consistent.
+        if (beta_end_times.size() != beta_values.size()) {
+            return false;
+        }
+        if (!beta_end_times.empty()) {
+            if (!std::is_sorted(beta_end_times.begin(), beta_end_times.end())) {
+                return false;
+            }
+            double prev = -std::numeric_limits<double>::infinity();
+            for (double t : beta_end_times) {
+                if (!(t > prev)) return false;
+                prev = t;
+            }
+        }
+
         if (beta < 0 || theta < 0 || sigma < 0 || gamma_p < 0 || gamma_A < 0 || 
             gamma_I < 0 || gamma_H < 0 || gamma_ICU < 0) {
             return false;
+        }
+
+        for (double b : beta_values) {
+            if (b < 0 || !std::isfinite(b)) return false;
         }
         
         if ((p.array() < 0).any() || (p.array() > 1).any() ||

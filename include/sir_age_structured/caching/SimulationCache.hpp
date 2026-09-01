@@ -10,6 +10,7 @@
 #include <optional>
 #include <Eigen/Dense>
 #include <mutex>
+#include <atomic>
 
 namespace epidemic {
 
@@ -40,6 +41,21 @@ public:
     bool getLikelihood(const std::string& key, double& value) override;
     void storeLikelihood(const std::string& key, double value) override;
 
+    // Fast-path overloads for callers that already have a numeric hash key.
+    // These bypass string conversions and are useful in tight calibration loops.
+    bool getLikelihood(size_t key, double& value);
+    void storeLikelihood(size_t key, double value);
+
+    // Lightweight counters for benchmarking/diagnostics (thread-safe).
+    size_t getLikelihoodCalls() const { return likelihood_get_calls_.load(std::memory_order_relaxed); }
+    size_t getLikelihoodHits() const { return likelihood_get_hits_.load(std::memory_order_relaxed); }
+    size_t storeLikelihoodCalls() const { return likelihood_store_calls_.load(std::memory_order_relaxed); }
+    void resetLikelihoodStats() {
+        likelihood_get_calls_.store(0, std::memory_order_relaxed);
+        likelihood_get_hits_.store(0, std::memory_order_relaxed);
+        likelihood_store_calls_.store(0, std::memory_order_relaxed);
+    }
+
 private:
     // Structure of Arrays (SoA) for cache locality and SIMD friendliness
     size_t capacity_;
@@ -59,6 +75,11 @@ private:
     size_t evict();
 
     mutable std::mutex mutex_;
+
+    // Stats (do not affect cache behavior)
+    mutable std::atomic<size_t> likelihood_get_calls_{0};
+    mutable std::atomic<size_t> likelihood_get_hits_{0};
+    mutable std::atomic<size_t> likelihood_store_calls_{0};
 };
 
 } // namespace epidemic

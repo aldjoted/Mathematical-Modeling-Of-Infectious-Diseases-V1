@@ -58,28 +58,7 @@ CalibrationData::CalibrationData(
         initial_cumulative_icu_row0_in.size() != num_age_classes) {
         throw std::invalid_argument("Initial cumulative data vector size mismatch with num_age_classes.");
     }
-    /**
-     * @brief Initializes a cumulative data matrix based on new incidence and an initial cumulative row.
-     * 
-     * This helper lambda function is used within the constructor to populate
-     * the cumulative data matrices (e.g., cumulative_confirmed_cases, cumulative_deaths).
-     * It takes an empty cumulative matrix, a matrix of corresponding new daily incidence,
-     * and a vector representing the cumulative count at the very first time point (t0).
-     * 
-     * For each subsequent time point t > t0, the cumulative count is calculated as:
-     * Cumulative(t) = Cumulative(t-1) + NewIncidence(t-1)
-     * 
-     * If n_data_points is 0, the cumulative_matrix is resized to be empty (0 rows).
-     * 
-     * @param cumulative_matrix (Eigen::MatrixXd&) A reference to the cumulative matrix to be populated.
-     *                                           It will be resized according to n_data_points and num_age_classes.
-     * @param new_cases_matrix (const Eigen::MatrixXd&) A constant reference to the matrix of new daily
-     *                                                 incidence data. Rows correspond to time, columns to age groups.
-     * @param initial_cumulative_row0 (const Eigen::VectorXd&) A constant reference to the vector containing
-     *                                                        the cumulative counts for each age group at the
-     *                                                        first time point (t0). This forms the first row
-     *                                                        of the `cumulative_matrix`.
-     */
+    // Helper to initialize cumulative matrices from daily incidence and initial row
     auto initialize_cumulative = [&](Eigen::MatrixXd& cumulative_matrix,
                                      const Eigen::MatrixXd& new_cases_matrix,
                                      const Eigen::VectorXd& initial_cumulative_row0) {
@@ -276,12 +255,6 @@ bool CalibrationData::readCSVData(const std::string& filename,
     while (std::getline(header_stream, column, ',')) {
         column_indices[column] = idx++;
     }
-    /**
-     * @brief Lambda function to find column index by name
-     * @param name Name of the column to find
-     * @return int Index of the named column
-     * @throws std::runtime_error If the column is not found
-     */
     auto get_index = [&](const std::string& name) {
         auto it = column_indices.find(name);
         if (it == column_indices.end()) {
@@ -351,7 +324,7 @@ bool CalibrationData::readCSVData(const std::string& filename,
 
     file.clear();
     file.seekg(data_start);
-    // Resize Eigen matrices
+    
     new_confirmed_cases.resize(n_data_points, num_age_classes);
     new_deaths.resize(n_data_points, num_age_classes);
     new_hospitalizations.resize(n_data_points, num_age_classes);
@@ -361,11 +334,7 @@ bool CalibrationData::readCSVData(const std::string& filename,
     cumulative_hospitalizations.resize(n_data_points, num_age_classes);
     cumulative_icu.resize(n_data_points, num_age_classes);
     population_by_age.resize(num_age_classes);
-    /**
-     * @brief Lambda function to parse a CSV row into vector of strings
-     * @param line String containing a CSV row
-     * @return std::vector<std::string> Vector of cell values
-     */
+    
     auto parse_csv_row = [](const std::string& line) {
         std::vector<std::string> row;
         std::istringstream line_stream(line);
@@ -399,12 +368,7 @@ bool CalibrationData::readCSVData(const std::string& filename,
         }
 
         dates.push_back(row[date_idx]);
-        /**
-         * @brief Lambda function to parse a string to double
-         * @param s String to parse
-         * @return double Parsed numeric value
-         * @throws std::runtime_error If parsing fails
-         */
+        
         auto parse_value = [&](const std::string& s) {
             double value;
             auto result = std::from_chars(s.data(), s.data() + s.size(), value);

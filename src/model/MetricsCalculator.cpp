@@ -29,8 +29,7 @@ EssentialMetrics MetricsCalculator::calculateEssentialMetrics(
     ReproductionNumberCalculator rn_calc(model);
     metrics.R0 = rn_calc.calculateR0();
     
-    // FIX Bug 2: Account for initial infections from initial state
-    // Extract initial compartments (E, P, A, I represent already infected individuals)
+    // Initial infections include all individuals who have been infected (everyone except S)
     Eigen::Map<const Eigen::VectorXd> E0(&initial_state[1 * num_age_classes], num_age_classes);
     Eigen::Map<const Eigen::VectorXd> P0(&initial_state[2 * num_age_classes], num_age_classes);
     Eigen::Map<const Eigen::VectorXd> A0(&initial_state[3 * num_age_classes], num_age_classes);
@@ -39,11 +38,8 @@ EssentialMetrics MetricsCalculator::calculateEssentialMetrics(
     Eigen::Map<const Eigen::VectorXd> ICU0(&initial_state[6 * num_age_classes], num_age_classes);
     Eigen::Map<const Eigen::VectorXd> R0_vec(&initial_state[7 * num_age_classes], num_age_classes);
     
-    // Initial infections include all individuals who have been infected (everyone except S)
-    // This accounts for the initial state multipliers applied during model initialization
     Eigen::VectorXd initial_infections = E0 + P0 + A0 + I0 + H0 + ICU0 + R0_vec;
     
-    // Initialize accumulators with initial infections
     Eigen::VectorXd cumulative_infections = initial_infections;
     Eigen::VectorXd cumulative_hosp = Eigen::VectorXd::Zero(num_age_classes);
     Eigen::VectorXd cumulative_icu = Eigen::VectorXd::Zero(num_age_classes);
@@ -116,11 +112,9 @@ EssentialMetrics MetricsCalculator::calculateEssentialMetrics(
         Eigen::VectorXd new_infections = lambda_t.array() * S_t.array() * dt;
         
         cumulative_infections += new_infections;
-        // cumulative_hosp and cumulative_icu are now calculated from cumulative states after the loop
         
         // Seroprevalence at target day
         if (static_cast<long>(t) == target_idx) {
-            // Fix: Calculate seroprevalence as (Total Pop - Susceptibles) / Total Pop
             double total_susceptible = S_t.sum();
             metrics.seroprevalence_at_target_day = (total_population - total_susceptible) / total_population;
         }
@@ -146,22 +140,19 @@ EssentialMetrics MetricsCalculator::calculateEssentialMetrics(
     metrics.overall_IFR = (cumulative_infections.sum() > 1e-9) ? 
         cumulative_deaths.sum() / cumulative_infections.sum() : 0.0;
     
-    // Age-specific metrics
-    // FIX Bug 3: Add bounds checking to prevent extreme ratio values
-    const double MIN_INFECTIONS_FOR_RATIO = 1.0; // Minimum infections to compute meaningful ratios
-    const double MAX_RATIO = 1.0; // Ratios cannot exceed 1.0 (100%)
+    // Age-specific metrics with bounds checking to prevent extreme ratio values
+    const double MIN_INFECTIONS_FOR_RATIO = 1.0;
+    const double MAX_RATIO = 1.0;
     
     for (int age = 0; age < num_age_classes; ++age) {
         metrics.age_specific_attack_rate[age] = (params.N(age) > 0) ? 
             cumulative_infections(age) / params.N(age) : 0.0;
         
-        // Use stricter threshold and clamp ratios to valid range [0, 1]
         if (cumulative_infections(age) > MIN_INFECTIONS_FOR_RATIO) {
             double ifr = cumulative_deaths(age) / cumulative_infections(age);
             double ihr = cumulative_hosp(age) / cumulative_infections(age);
             double iicur = cumulative_icu(age) / cumulative_infections(age);
             
-            // Clamp to valid range [0, MAX_RATIO]
             metrics.age_specific_IFR[age] = std::max(0.0, std::min(ifr, MAX_RATIO));
             metrics.age_specific_IHR[age] = std::max(0.0, std::min(ihr, MAX_RATIO));
             metrics.age_specific_IICUR[age] = std::max(0.0, std::min(iicur, MAX_RATIO));
@@ -223,10 +214,8 @@ std::vector<double> MetricsCalculator::calculateSeroprevalenceTrajectory(
     double total_population = params.N.sum();
     
     for (size_t t = 0; t < time_points.size(); ++t) {
-        // Extract state at time t
         Eigen::Map<const Eigen::VectorXd> S_t(&sim_result.solution[t][0], num_age_classes);
         
-        // Fix: Calculate seroprevalence as (Total Pop - Susceptibles) / Total Pop
         double total_susceptible = S_t.sum();
         double seroprevalence = (total_population - total_susceptible) / total_population;
         
