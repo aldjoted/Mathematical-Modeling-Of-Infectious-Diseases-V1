@@ -74,28 +74,28 @@ namespace epidemic {
                                             "' in the model's state names with the expected structure.");
         }
     
+        // The compartment block [offset, offset + num_age_classes) is loop-invariant,
+        // so bounds are validated once here rather than per time point.
+        if (offset < 0 || offset + num_age_classes > state_size) {
+            throw SimulationException("SimulationResultProcessor::getCompartmentData",
+                                      "Internal error: compartment block [" + std::to_string(offset) + ", " +
+                                      std::to_string(offset + num_age_classes) + ") out of bounds [0, " +
+                                      std::to_string(state_size) + ").");
+        }
+
         Eigen::MatrixXd compartment_result(result.solution.size(), num_age_classes);
         for (size_t t = 0; t < result.solution.size(); ++t) {
-            if (result.solution[t].size() != static_cast<size_t>(state_size)) {
+            const std::vector<double>& state = result.solution[t];
+            if (state.size() != static_cast<size_t>(state_size)) {
                 throw SimulationException("SimulationResultProcessor::getCompartmentData",
                                           "Internal error: Solution vector size mismatch at time index " + std::to_string(t) +
                                           ". Expected " + std::to_string(state_size) + ", got " +
-                                          std::to_string(result.solution[t].size()) + ".");
+                                          std::to_string(state.size()) + ".");
             }
+            const double* src = state.data() + offset;
             for (int a = 0; a < num_age_classes; ++a) {
-                int index = offset + a;
-                 if (index < 0 || index >= state_size) {
-                     throw SimulationException("SimulationResultProcessor::getCompartmentData",
-                                               "Internal error: Calculated index (" + std::to_string(index) +
-                                               ") out of bounds [0, " + std::to_string(state_size - 1) + "].");
-                }   
-                compartment_result(t, a) = result.solution[t][index];
+                compartment_result(t, a) = src[a];
             }
-            const auto state_names = model.getStateNames();
-            if (state_names.size() != static_cast<size_t>(state_size)) {
-                THROW_MODEL_EXCEPTION("SimulationResultProcessor::getCompartmentData", "Model returned inconsistent number of state names.");
-            }
-            
         }
         return compartment_result;
     }
@@ -155,33 +155,35 @@ namespace epidemic {
         int n_ages = model.getNumAgeClasses();
         int n_times = result.time_points.size();
         
+        // The model downcast and its population / contact-matrix accessors do not depend on
+        // t, so they are resolved once instead of once per time point (the accessors return
+        // by value, so this also drops a vector and a matrix copy per time point).
+        const auto* concrete_model = dynamic_cast<const AgeSIRModel*>(&model);
+        if (!concrete_model) {
+            throw ModelException("SimulationResultProcessor::getIncidenceData",
+                                "Model does not provide required methods for incidence calculation");
+        }
+
+        const Eigen::VectorXd N = concrete_model->getPopulationSizes();
+        const double q = concrete_model->getTransmissibility();
+        const Eigen::MatrixXd C = concrete_model->getCurrentContactMatrix();
+
         Eigen::MatrixXd incidence(n_times, n_ages);
-        
+        Eigen::VectorXd I_over_N(n_ages);
+        Eigen::VectorXd lambda(n_ages);
+
         for (int t = 0; t < n_times; t++) {
             const std::vector<double>& state = result.solution[t];
-            
+
             Eigen::Map<const Eigen::VectorXd> S(&state[0], n_ages);
             Eigen::Map<const Eigen::VectorXd> I(&state[n_ages], n_ages);
-            
-            auto* concrete_model = dynamic_cast<const AgeSIRModel*>(&model);
-            if (!concrete_model) {
-                throw ModelException("SimulationResultProcessor::getIncidenceData", 
-                                    "Model does not provide required methods for incidence calculation");
-            }
 
-            Eigen::VectorXd N = concrete_model->getPopulationSizes();
-            double q = concrete_model->getTransmissibility();
-            Eigen::MatrixXd C = concrete_model->getCurrentContactMatrix();
-            
-            Eigen::VectorXd I_over_N = Eigen::VectorXd::Zero(n_ages);
             for(int j=0; j<n_ages; ++j) {
-                if (N(j) > 1e-9) {
-                    I_over_N(j) = I(j) / N(j);
-                }
+                I_over_N(j) = (N(j) > 1e-9) ? (I(j) / N(j)) : 0.0;
             }
-            Eigen::VectorXd lambda = q * (C * I_over_N);
+            lambda.noalias() = q * (C * I_over_N);
             lambda = lambda.cwiseMax(0.0);
-            
+
             incidence.row(t) = (lambda.array() * S.array()).transpose();
         }
         

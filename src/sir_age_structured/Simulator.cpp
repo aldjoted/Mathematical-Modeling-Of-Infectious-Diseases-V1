@@ -97,11 +97,14 @@ namespace epidemic {
             (*model)(x, dxdt, t);
         };
     
-        std::vector<state_type> raw_solution;
-        raw_solution.reserve(output_time_points.size());
-        auto observer = [&result, &raw_solution](const state_type& x, double t) {
+        // Record straight into the result: staging the trajectory in a scratch vector and
+        // copying it across afterwards doubled the allocation and memcpy cost of every run,
+        // and this runs once per objective evaluation during calibration.
+        result.time_points.reserve(output_time_points.size());
+        result.solution.reserve(output_time_points.size());
+        auto observer = [&result](const state_type& x, double t) {
             result.time_points.push_back(t);
-            raw_solution.push_back(x);
+            result.solution.push_back(x);
             //Logger::getInstance().debug("Simulator::run observer", "t = " + std::to_string(t) + ", S_age0 = " + std::to_string(x[0]));
         };
     
@@ -129,14 +132,12 @@ namespace epidemic {
             throw SimulationException("Simulator::run", msg);
         }
     
+        if (result.time_points.empty()) {
+            throw SimulationException("Simulator::run", "Integration produced no output points.");
+        }
         if (result.time_points.front() != output_time_points.front()) {
             throw SimulationException("Simulator::run",
                                       "Missing initial timepoint " + std::to_string(output_time_points.front()));
-        }
-    
-        result.solution.reserve(raw_solution.size());
-        for (const auto& state_vec : raw_solution) {
-            result.solution.push_back(state_vec);
         }
     
         if (result.solution.size() != result.time_points.size()) {

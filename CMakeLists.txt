@@ -31,7 +31,9 @@ endif()
 # Dependencies
 find_package(GSL REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-find_package(Boost REQUIRED COMPONENTS system)
+# Use legacy FindBoost module to avoid CMP0167 issues with missing boost_system component
+cmake_policy(SET CMP0167 OLD)
+find_package(Boost REQUIRED)
 find_package(GTest REQUIRED)
 find_package(OpenMP REQUIRED)
 
@@ -60,7 +62,6 @@ target_link_libraries(sir_models_lib
         GSL::gsl
         GSL::gslcblas
         Eigen3::Eigen
-        Boost::system
         OpenMP::OpenMP_CXX
 )
 
@@ -125,7 +126,6 @@ target_link_libraries(epidemic_models_lib
         GSL::gsl
         GSL::gslcblas
         Eigen3::Eigen
-        Boost::system
         OpenMP::OpenMP_CXX
 )
 
@@ -240,7 +240,6 @@ target_link_libraries(model_tests
     PRIVATE
         epidemic_models_lib
         GTest::gtest
-        GTest::gmock
         GTest::gtest_main
 )
 add_test(NAME ModelTests COMMAND model_tests)
@@ -260,7 +259,6 @@ target_link_libraries(sir_age_structured_tests
     PRIVATE
         epidemic_models_lib
         GTest::gtest
-        GTest::gmock
         GTest::gtest_main
 )
 add_test(NAME SirAgeStructuredTests COMMAND sir_age_structured_tests)

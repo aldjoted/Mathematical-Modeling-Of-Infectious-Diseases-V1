@@ -123,6 +123,14 @@ namespace epidemic {
         mutable double* cached_lambda_ptr_ = nullptr;
 
         /**
+         * @brief Optimization: memoised compartment names.
+         * Depends only on num_age_classes, which is fixed after construction, so it is
+         * built lazily on first use and reused thereafter. getStateNames() sits on the
+         * calibration hot path via SimulationResultProcessor::getCompartmentData.
+         */
+        mutable std::vector<std::string> cached_state_names_;
+
+        /**
          * @brief Resizes the working vectors to match the number of age classes.
          */
         void resizeWorkingVectors();

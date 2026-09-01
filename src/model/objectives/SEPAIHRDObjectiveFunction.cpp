@@ -35,6 +35,7 @@ SEPAIHRDObjectiveFunction::SEPAIHRDObjectiveFunction(
       abs_err_(abs_error), rel_err_(rel_error), simulator_(nullptr)
 {
     sepaihrd_manager_ = dynamic_cast<SEPAIHRDParameterManager*>(&parameterManager_);
+    fast_cache_ = dynamic_cast<SimulationCache*>(&cache_);
 
     runup_offset_ = 0;
     for (size_t i = 0; i < time_points_.size(); ++i) {
@@ -60,7 +61,7 @@ void SEPAIHRDObjectiveFunction::preallocateInternalMatrices() const {
 }
 
 double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) const {
-    SimulationCache* fast_cache = dynamic_cast<SimulationCache*>(&cache_);
+    SimulationCache* fast_cache = fast_cache_;
     size_t fast_key = 0;
 
     if (fast_cache) {
@@ -215,9 +216,15 @@ double SEPAIHRDObjectiveFunction::calculate(const Eigen::VectorXd& parameters) c
     }
 
     // Compute log-likelihoods for each data stream
-    const auto local_sim_hosp = ctx.sim_hosp.bottomRows(num_obs_points_);
-    const auto local_sim_icu = ctx.sim_icu.bottomRows(num_obs_points_);
-    const auto local_sim_deaths = ctx.sim_deaths.bottomRows(num_obs_points_);
+    // Passed as Eigen::Ref with a dynamic outer stride so these bottom-row blocks bind
+    // directly to the thread-local buffers. Binding them to a const MatrixXd& instead
+    // materialised a full temporary copy of each block on every evaluation.
+    const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>> local_sim_hosp(
+        ctx.sim_hosp.bottomRows(num_obs_points_));
+    const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>> local_sim_icu(
+        ctx.sim_icu.bottomRows(num_obs_points_));
+    const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>> local_sim_deaths(
+        ctx.sim_deaths.bottomRows(num_obs_points_));
 
     double ll_hosp = calculateSingleLogLikelihood(local_sim_hosp, observed_data_.getNewHospitalizations(), "H");
     double ll_icu = calculateSingleLogLikelihood(local_sim_icu, observed_data_.getNewICU(), "ICU");
@@ -239,8 +246,8 @@ const std::vector<std::string>& SEPAIHRDObjectiveFunction::getParameterNames() c
 }
 
 double SEPAIHRDObjectiveFunction::calculateSingleLogLikelihood(
-    const Eigen::MatrixXd& simulated,
-    const Eigen::MatrixXd& observed,
+    const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>>& simulated,
+    const Eigen::Ref<const Eigen::MatrixXd, 0, Eigen::OuterStride<>>& observed,
     const std::string& dataType) const
 {
     (void)dataType;
